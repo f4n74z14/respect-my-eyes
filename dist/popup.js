@@ -1,13 +1,13 @@
 (function () {
     "use strict";
 
-    const F = self.FMBF;
+    const F = self.RME;
     const $ = function (id) { return document.getElementById(id); };
 
     let settings, bf, tab, host = "";
 
     function save() {
-        return chrome.storage.local.set({ settings: settings });
+        return chrome.storage.local.set({ [F.KEYS.settings]: settings });
     }
 
     function say(text) { $("msg").textContent = text; }
@@ -105,9 +105,9 @@
     }
 
     async function main() {
-        const data = await chrome.storage.local.get(["settings", "browserFonts"]);
-        settings = F.normalizeSettings(data.settings);
-        bf = data.browserFonts;
+        const data = await chrome.storage.local.get([F.KEYS.settings, F.KEYS.fonts]);
+        settings = F.normalizeSettings(data[F.KEYS.settings]);
+        bf = data[F.KEYS.fonts];
 
         $("enabled").checked = settings.enabled;
         $("enabled").onchange = async function () { settings.enabled = this.checked; await save(); say(this.checked ? "Enabled." : "Disabled. Reload to restore original fonts."); };
@@ -121,7 +121,7 @@
 
         let report = null;
 
-        try { report = tab ? await chrome.tabs.sendMessage(tab.id, { type: "fmbf:report" }, { frameId: 0 }) : null; }
+        try { report = tab ? await chrome.tabs.sendMessage(tab.id, { type: "rme:report" }, { frameId: 0 }) : null; }
         catch (e) { report = null; }
 
         if (report) host = report.host;

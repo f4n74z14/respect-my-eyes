@@ -4,14 +4,17 @@
     "version": "2.0.0",
     "description": "Forces websites to use the serif, sans-serif and monospace fonts from your browser's font settings, without breaking icon fonts.",
     "icons": {
-        "16": "icon.png",
-        "32": "icon.png",
-        "48": "icon.png",
-        "64": "icon.png",
-        "128": "icon.png"
+        "16": "icon-16.png",
+        "32": "icon-32.png",
+        "48": "icon-48.png",
+        "128": "icon-128.png"
     },
     "action": {
-        "default_icon": "icon.png",
+        "default_icon": {
+            "16": "icon-16.png",
+            "32": "icon-32.png",
+            "48": "icon-48.png"
+        },
         "default_title": "Respect My Eyes",
         "default_popup": "popup.html"
     },
@@ -26,11 +29,18 @@
         "storage",
         "fontSettings"
     ],
-    "content_scripts": [{
-        "matches": ["<all_urls>"],
-        "run_at": "document_start",
-        "all_frames": true,
-        "match_about_blank": true,
-        "js": ["common.js", "content.js"]
-    }]
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "run_at": "document_start",
+            "all_frames": true,
+            "match_about_blank": true,
+            "js": [
+                "common.js",
+                "content.js"
+            ]
+        }
+    ]
 }

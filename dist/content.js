@@ -1,5 +1,5 @@
 /*
- * Force My Browser Fonts - content script
+ * Respect My Eyes - content script
  *
  * Forces the fonts configured in the browser (chrome://settings/fonts) onto every page, without breaking icon fonts.
  *
@@ -13,12 +13,13 @@
 (function () {
     "use strict";
 
-    const F = self.FMBF;
+    const F = self.RME;
 
-    if (!F || window.__fmbfLoaded) return;
-    window.__fmbfLoaded = true;
+    if (!F || window.__rmeLoaded) return;
+    window.__rmeLoaded = true;
 
     const CATS = F.CATS;
+    const K = F.KEYS;
 
     let cfg = null;                 // resolved configuration, null while disabled / excluded
     let offReason = "disabled";
@@ -46,7 +47,7 @@
         }
         if (!this.el) {
             this.el = document.createElement("style");
-            this.el.setAttribute("data-fmbf", "");
+            this.el.setAttribute("data-rme", "");
         }
         this.el.textContent = css;
         if (!this.el.isConnected) (document.head || document.documentElement).appendChild(this.el);
@@ -230,6 +231,37 @@
         }
     }
 
+    // Faces the page declared, read from document.fonts. Works for stylesheets blocked by CORS and for FontFace() created in JS.
+    function readPageFaces() {
+        let changed = false;
+
+        try {
+            document.fonts.forEach(function (f) {
+                const family = String(f.family).replace(/^\s*["']|["']\s*$/g, "");
+                const lower = F.norm(family);
+                const key = lower + "|" + f.weight + "|" + f.style + "|" + f.stretch;
+
+                if (acc.faceKeys.has(key)) return;     // also skips our own faces, which show up in document.fonts too
+
+                acc.faceKeys.add(key);
+
+                const desc = { family: family, lower: lower, weight: f.weight, style: f.style, stretch: f.stretch };
+
+                if (!F.isStandardFace(desc)) { acc.pageFaces.set(key, desc); changed = true; }
+
+                const cat = F.classifyName(lower, cfg.matchers);
+
+                if (CATS.indexOf(cat) > -1 && !cfg.chosenLower.has(lower) && !acc.faces.has(lower)) {
+                    acc.faces.set(lower, { name: family, cat: cat });
+                    changed = true;
+                }
+            });
+        }
+        catch (e) { /* document.fonts unavailable */ }
+
+        return changed;
+    }
+
     // ---------------------------------------------------------------------------------------------------------------
     // CSS generation
     // ---------------------------------------------------------------------------------------------------------------
@@ -261,6 +293,18 @@
         const out = [];
 
         acc.faces.forEach(function (f) { out.push(faceCss(f.name, f.cat)); });
+
+        acc.pageFaces.forEach(function (pf) {
+            if (F.isStandardFace(pf)) return;
+
+            const known = acc.faces.get(pf.lower);
+            const cat = known ? known.cat : cfg.matchers.manual.get(pf.lower);
+
+            if (CATS.indexOf(cat) > -1 && !cfg.chosenLower.has(pf.lower)) {
+                const css = F.fontFaceExtraCss(pf.family, cat, cfg.fonts[cat].name, cfg.monoScale, pf);
+                if (css) out.push(css);
+            }
+        });
 
         CATS.forEach(function (cat) {
             if (!acc.sel[cat].size) return;
@@ -310,6 +354,22 @@
      * font-family: var(--x), inline styles. Elements are de-duplicated by tag + class + style and processed in small
      * chunks so the page never stutters. Names found here are overridden through @font-face, like all others.
      */
+    // Light DOM plus open shadow roots (custom-element sites such as developers.google.com)
+    function collectElements(root, limit) {
+        const out = [], stack = [root];
+
+        while (stack.length && out.length < limit) {
+            const node = stack.pop();
+            const all = node.querySelectorAll("*");
+
+            for (let i = 0; i < all.length && out.length < limit; i++) {
+                out.push(all[i]);
+                if (all[i].shadowRoot) stack.push(all[i].shadowRoot);
+            }
+        }
+        return out;
+    }
+
     let sampling = false, sampleAgain = false, sampledKeys, sampledOnce;
 
     function sample() {
@@ -319,8 +379,8 @@
         sampling = true;
         sampledOnce = true;
 
-        const els = document.body.getElementsByTagName("*");
-        const max = Math.min(els.length, 5000);
+        const els = collectElements(document.body, 6000);
+        const max = els.length;
         let i = 0, added = false;
 
         (function chunk() {
@@ -348,7 +408,7 @@
 
             sampling = false;
 
-            if (added) { rebuild(); deleteFontFaces(); }
+            if (added) { readPageFaces(); rebuild(); deleteFontFaces(); }
             if (sampleAgain) { sampleAgain = false; sample(); }
         })();
     }
@@ -356,9 +416,9 @@
     function run() {
         if (!cfg) return;
 
-        const changed = scanDocument();
+        const changed = scanDocument() | readPageFaces();      // not ||: both must run
 
-        rebuild();
+        if (changed || lastSiteCss === null || !bodyCat) rebuild();     // nothing new, nothing to regenerate
 
         if (changed) deleteFontFaces();
         if (changed || !sampledOnce) sample();
@@ -398,6 +458,8 @@
             if (e.target && e.target.nodeName === "LINK") schedule(50);
         }, true);
 
+        try { document.fonts.addEventListener("loadingdone", function () { schedule(50); }); } catch (e) { /* optional */ }
+
         window.addEventListener("load", function () { schedule(50); setTimeout(function () { schedule(0); }, 500); });
     }
 
@@ -423,7 +485,7 @@
         analysisCache = new Map();
         processed = new WeakMap();
         unreadable = new WeakSet();
-        acc = { faces: new Map(), faceRules: [], sel: { sans: new Set(), serif: new Set(), mono: new Set() }, vars: [] };
+        acc = { faces: new Map(), pageFaces: new Map(), faceKeys: new Set(), faceRules: [], sel: { sans: new Set(), serif: new Set(), mono: new Set() }, vars: [] };
         bodyCat = null;
         sampledKeys = new Set();
         sampledOnce = false;
@@ -459,12 +521,12 @@
 
     function load() {
         try {
-            chrome.storage.local.get(["settings", "browserFonts"], function (data) {
+            chrome.storage.local.get([K.settings, K.fonts], function (data) {
                 if (chrome.runtime.lastError) return;
 
                 const wasOn = !!cfg;
 
-                configure(data.settings, data.browserFonts);
+                configure(data[K.settings], data[K.fonts]);
 
                 if (!wasOn && cfg) schedule(0);
             });
@@ -474,12 +536,12 @@
 
     try {
         chrome.storage.onChanged.addListener(function (changes, area) {
-            if (area === "local" && (changes.settings || changes.browserFonts)) load();     // apply live, no reload needed
+            if (area === "local" && (changes[K.settings] || changes[K.fonts])) load();     // apply live, no reload needed
         });
 
         // The popup asks the top frame which fonts on this page could not be classified
         chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-            if (!msg || msg.type !== "fmbf:report" || window !== window.top) return;
+            if (!msg || msg.type !== "rme:report" || window !== window.top) return;
 
             sendResponse(buildReport());
         });

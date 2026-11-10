@@ -1,7 +1,7 @@
 (function () {
     "use strict";
 
-    const F = self.FMBF;
+    const F = self.RME;
     const $ = function (id) { return document.getElementById(id); };
 
     let settings = F.normalizeSettings(null);
@@ -13,7 +13,7 @@
     function save() {
         clearTimeout(saveTimer);
         saveTimer = setTimeout(function () {
-            chrome.storage.local.set({ settings: settings }, function () {
+            chrome.storage.local.set({ [F.KEYS.settings]: settings }, function () {
                 const el = $("saved");
                 el.classList.add("show");
                 setTimeout(function () { el.classList.remove("show"); }, 900);
@@ -242,7 +242,7 @@
 
         $("openBrowserFonts").onclick = function () { chrome.tabs.create({ url: "chrome://settings/fonts" }); };
         $("refreshBf").onclick = function () {
-            chrome.runtime.sendMessage({ type: "fmbf:refresh" }, function (r) {
+            chrome.runtime.sendMessage({ type: "rme:refresh" }, function (r) {
                 bf = r || bf;
                 renderBrowserStatus();
                 renderFonts();
@@ -253,7 +253,7 @@
             const blob = new Blob([JSON.stringify(settings, null, 2)], { type: "application/json" });
             const a = document.createElement("a");
             a.href = URL.createObjectURL(blob);
-            a.download = "respect-my-eyes.json";
+            a.download = "respect-my-eyes-settings.json";
             a.click();
             setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
         };
@@ -285,21 +285,21 @@
         renderManual();
     }
 
-    chrome.storage.local.get(["settings", "browserFonts"], function (data) {
-        settings = F.normalizeSettings(data.settings);
-        bf = data.browserFonts || null;
+    chrome.storage.local.get([F.KEYS.settings, F.KEYS.fonts], function (data) {
+        settings = F.normalizeSettings(data[F.KEYS.settings]);
+        bf = data[F.KEYS.fonts] || null;
 
         bindManual();
         renderAll();
         loadInstalledFonts();
 
-        if (!bf) chrome.runtime.sendMessage({ type: "fmbf:refresh" }, function (r) { bf = r; renderBrowserStatus(); renderFonts(); });
+        if (!bf) chrome.runtime.sendMessage({ type: "rme:refresh" }, function (r) { bf = r; renderBrowserStatus(); renderFonts(); });
     });
 
     // Keep the "browser setting" labels current if the user changes chrome://settings/fonts while this page is open
     chrome.storage.onChanged.addListener(function (changes, area) {
-        if (area === "local" && changes.browserFonts) {
-            bf = changes.browserFonts.newValue;
+        if (area === "local" && changes[F.KEYS.fonts]) {
+            bf = changes[F.KEYS.fonts].newValue;
             renderBrowserStatus();
             renderFonts();
         }

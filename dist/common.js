@@ -1,11 +1,14 @@
 /*
- * Force My Browser Fonts - shared logic
+ * Respect My Eyes - shared logic
  *
  * Loaded by the content script, the service worker, the popup and the options page, so everything in here
- * must be free of DOM / chrome.* dependencies. Exposed as self.FMBF.
+ * must be free of DOM / chrome.* dependencies. Exposed as self.RME.
  */
 (function (root) {
     "use strict";
+
+    // chrome.storage.local keys (v1 used the unprefixed names, background.js migrates them)
+    const KEYS = { settings: "rmeSettings", fonts: "rmeBrowserFonts", legacy: ["settings", "browserFonts"] };
 
     const CATS = ["sans", "serif", "mono"];
     const MANUAL_CATS = ["sans", "serif", "mono", "ignore"];
@@ -331,23 +334,73 @@
     function familyValue(cat, fonts) { return cssQuote(fonts[cat].name) + ", " + GENERIC_FALLBACK[cat]; }
 
     /*
-     * Four @font-face rules per family instead of twenty: weight ranges replace the one-rule-per-weight approach.
-     * Chromium treats 550+ as bold, so regular covers 100-549 and bold covers 550-900.
+     * Static faces: regular + bold, upright + italic (4 rules per family). Chromium treats 600+ as bold, and for
+     * system fonts the browser picks the nearest of the two for any other weight.
+     * Any other descriptor the page declares (300, 500, variable ranges...) is replicated exactly by
+     * fontFaceExtraCss(), so a page's own @font-face that cannot be removed (stylesheet blocked by CORS) is always
+     * merged with ours and ours, declared later, wins.
      */
-    function fontFaceCss(family, cat, fontName, scalePct) {
-        const fam = cssQuote(family);
-        const adjust = cat === "mono" && scalePct ? " size-adjust:" + scalePct + "%;" : "";
+    const WEIGHTS = [400, 700];
+
+    function srcFor(fontName, bold, italic) {
         const L = function (suffix) { return "local(" + cssQuote(fontName + suffix) + ")"; };
 
-        function face(weight, style, srcs) {
-            return "@font-face{font-family:" + fam + ";font-weight:" + weight + ";font-style:" + style + ";src:" + srcs.join(",") + ";" + adjust + "}";
+        if (!bold && !italic) return [L(""), L(" Regular")];
+        if (bold && !italic) return [L(" Bold"), L("")];
+        if (!bold && italic) return [L(" Italic"), L(" Oblique"), L("")];
+        return [L(" Bold Italic"), L(" Bold Oblique"), L(" Bold"), L("")];
+    }
+
+    function faceRule(fam, weight, style, stretch, src, adjust) {
+        return "@font-face{font-family:" + fam + ";font-weight:" + weight + ";font-style:" + style +
+            (stretch && stretch !== "normal" ? ";font-stretch:" + stretch : "") + ";src:" + src.join(",") + ";" + adjust + "}";
+    }
+
+    function adjustDecl(cat, scalePct) { return cat === "mono" && scalePct ? "size-adjust:" + scalePct + "%;" : ""; }
+
+    function fontFaceCss(family, cat, fontName, scalePct) {
+        const fam = cssQuote(family), adjust = adjustDecl(cat, scalePct), out = [];
+
+        WEIGHTS.forEach(function (w) {
+            ["normal", "italic"].forEach(function (style) {
+                out.push(faceRule(fam, w, style, null, srcFor(fontName, w >= 600, style === "italic"), adjust));
+            });
+        });
+        return out.join("\n");
+    }
+
+    function weightBounds(weight) {
+        const n = String(weight).split(/\s+/).map(function (x) { return x === "normal" ? 400 : x === "bold" ? 700 : parseFloat(x); }).filter(isFinite);
+        return n.length ? [n[0], n[n.length - 1]] : null;
+    }
+
+    // true when fontFaceCss() already produces a rule with exactly these descriptors
+    function isStandardFace(d) {
+        const b = weightBounds(d.weight);
+        return !!b && b[0] === b[1] && WEIGHTS.indexOf(b[0]) > -1 && /^(normal|italic)$/.test(d.style) && /^(normal|100%)$/.test(d.stretch || "normal");
+    }
+
+    /*
+     * Replicates the descriptors of a face the PAGE declared (read from document.fonts, which works even when the
+     * stylesheet itself is blocked by CORS). Identical descriptors make the browser merge our face with the page's
+     * one, and the later declaration wins. This also replaces variable fonts (font-weight: 1 1000, font-stretch: 25% 151%).
+     * Values come from the page, so they are validated before being put into CSS.
+     */
+    function fontFaceExtraCss(family, cat, fontName, scalePct, d) {
+        const weight = String(d.weight), style = String(d.style), stretch = String(d.stretch || "normal");
+        const b = weightBounds(weight);
+
+        if (!b || !/^[\d.\s]+$|^(normal|bold)$/.test(weight) || !/^[a-z0-9 .\-]+$/i.test(style) || !/^[a-z0-9 .%\-]+$/i.test(stretch)) return "";
+
+        const fam = cssQuote(family), adjust = adjustDecl(cat, scalePct);
+        const italic = /^(italic|oblique)/i.test(style);
+        const out = [faceRule(fam, weight, style, stretch, srcFor(fontName, b[0] >= 600, italic), adjust)];
+
+        if (b[0] < 600 && b[1] >= 600) {      // a range spanning both: also offer a real bold for the upper half
+            out.push(faceRule(fam, b[0] + " 599", style, stretch, srcFor(fontName, false, italic), adjust));
+            out.push(faceRule(fam, "600 " + b[1], style, stretch, srcFor(fontName, true, italic), adjust));
         }
-        return [
-            face("100 549", "normal", [L(""), L(" Regular")]),
-            face("550 900", "normal", [L(" Bold"), L("")]),
-            face("100 549", "italic", [L(" Italic"), L(" Oblique"), L("")]),
-            face("550 900", "italic", [L(" Bold Italic"), L(" Bold Oblique"), L(" Bold"), L("")])
-        ].join("\n");
+        return out.join("\n");
     }
 
     function monoSizeDecl(cfg) {
@@ -365,13 +418,13 @@
         return monoRule(sel, cfg);
     }
 
-    root.FMBF = {
-        CATS: CATS, MANUAL_CATS: MANUAL_CATS, CAT_LABEL: CAT_LABEL, GENERIC_FALLBACK: GENERIC_FALLBACK,
+    root.RME = {
+        KEYS: KEYS, CATS: CATS, MANUAL_CATS: MANUAL_CATS, CAT_LABEL: CAT_LABEL, GENERIC_FALLBACK: GENERIC_FALLBACK,
         DEFAULT_SETTINGS: DEFAULT_SETTINGS, DEFAULT_MANUAL_FONTS: DEFAULT_MANUAL_FONTS,
         norm: norm, cssQuote: cssQuote, cleanHost: cleanHost, cleanHostList: cleanHostList, cleanManual: cleanManual,
         buildMatchers: buildMatchers, classifyName: classifyName, splitFamilies: splitFamilies,
         analyzeStack: analyzeStack, looksLikeFontStack: looksLikeFontStack,
         normalizeSettings: normalizeSettings, isExcluded: isExcluded, resolveFonts: resolveFonts,
-        familyValue: familyValue, fontFaceCss: fontFaceCss, monoRule: monoRule, monoDefaultsCss: monoDefaultsCss
+        familyValue: familyValue, fontFaceCss: fontFaceCss, fontFaceExtraCss: fontFaceExtraCss, isStandardFace: isStandardFace, monoRule: monoRule, monoDefaultsCss: monoDefaultsCss
     };
 })(typeof self !== "undefined" ? self : this);
