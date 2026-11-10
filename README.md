@@ -1,53 +1,62 @@
-# Force My Browser Fonts
-A Chrome extension that forces websites to substitute the fonts you choose for serif, sans-serif and monospace, while trying not to break icon fonts.
+# Respect My Eyes
 
-*Force My Browser Fonts* is currently the best way to force Chromium-based browsers to substitute the fonts you choose for serif, sans-serif and monospace without breaking icon fonts.
+Big thanks to the [Original Project](https://github.com/sysop84/force-my-browser-fonts)!
 
-My hope is that someone will edit/fork this repo and make it better because (1) I don't know how to write javascript and (2) I don't know how to write Chromium extensions.
+This is a major rewrite focused on browser-native font preferences, improved icon font compatibility, customization, and performance.
 
-If you know of a more comprehensive script/extension, please let me know and I'll add a note to the top of this repo and archive it.
+## Browser Font Preferences
 
-The work here was done purely out of desperation to ***Force My Browser Fonts***.
+- Automatically reads serif, sans-serif, fixed-width font families and fixed-width font size from browser settings.
+- No need to configure fonts separately for individual websites.
+- Font preferences are cached in the background and applied to open tabs when browser settings change.
+- Includes fallback fonts for browsers that don't expose font preferences to extensions.
+- Allows overriding individual font families with custom installed fonts.
 
-# Why?
-Because anti-aliased fonts are hard to read or look "dirty" to many people, and most fonts look awful with font smoothing disabled.
+## Custom Font Support
 
-Please don't get me started on the disastrous state of modern web design trends... e.g. mobile-first, icon-based-fonts, subpixel-font-rendering...
+- **Popup:** scans the current website for unrecognized fonts and lets you classify them as sans-serif, serif, monospace, or protected icon fonts. Changes apply immediately.
+- **Settings page:** provides an editable list of additional fonts, including support for bulk imports using the `Name|SANS-SERIF` format.
+- Configure monospace font size and scaling.
+- Exclude specific websites.
+- Add custom icon font keywords.
+- Import, export, and reset configuration.
 
-# Development Gotchas
-- Webmasters that don't use a base fallback font -- *for the love of sweet baby jesus, give me strength*
-- Icon fonts declared in pseudo-selectors `:before` or `:after`
-- Unknown icon font names
-- Styles loaded cross-domain
-- Styles injected after the page has loaded
-- Unfortunately *Stylish*/*Stylus* userStyles are not an option for this task because they lack conditional logic
+## Dynamic Font Detection
 
-# The List
-Here is a list of further reading on this topic, along with other similar extensions and userScripts
+Improved font detection handles cases that the original stylesheet-based approach could miss:
 
-### Further Reading
-1. [Force chrome to use my preferred font over the author's](https://superuser.com/q/1209191)
-2. [Force cleartype fonts in Google Chrome](https://superuser.com/q/239161)
-3. [Is it possible to override a web page's font-settings in Google Chrome for Windows](https://superuser.com/q/925242)
-4. [Enforcing customized fonts?](https://community.brave.com/t/enforcing-customized-fonts/464585)
-5. [Apply different styles based on a condition?](https://github.com/stylish-userstyles/stylish/issues/311)
+- Detects fonts referenced through CSS variables, such as `var(--font-family)`.
+- Detects fonts specified in inline styles.
+- Uses `getComputedStyle()` to inspect fonts actually applied to page elements, independently of how their styles were declared.
+- Handles cross-origin stylesheets that cannot be directly inspected due to browser CORS restrictions.
+- Processes elements incrementally in batches of 250 to reduce performance impact.
+- Groups elements with matching tags, classes, and inline styles to avoid redundant processing.
+- Applies detected font substitutions through the existing `@font-face` override mechanism.
 
-### Extensions
-1. [change all UI fonts](https://chromewebstore.google.com/detail/change-all-ui-fonts/loiejdbcheeiipmakhghinclmpafiiel)
-2. [Force Custom Fonts](https://chromewebstore.google.com/detail/force-custom-fonts/hckjchjpkmbihoocajjpjajkggbccgee)
-3. [Change Webpage Fonts](https://chromewebstore.google.com/detail/change-webpage-fonts/afelmehoohjbjfpjbadonkcondbilglp)
-4. [Fonts Changer](https://chromewebstore.google.com/detail/fonts-changer/phkenomnahhgjnmpignadbeandfanbil)
-5. [FontStyler](https://github.com/mira-ta/fontstyler-extension)
-6. [Improved Font Changer for Google Chrome](https://github.com/omgmog/chrome-conditional-font-changer)
-7. [Font Changer](https://github.com/SomeNormalRando/Font_Changer)
+This improves compatibility with modern websites using Tailwind CSS, CSS variables, dynamically injected styles, and external stylesheets.
 
-### userScripts
-1. [Font Substitution](https://greasyfork.org/en/scripts/462060-font-substitution/code)
-2. [Font Substitution v3](https://greasyfork.org/en/scripts/12007-font-substitution-v3/code)
-3. [Clean Font Families](https://greasyfork.org/en/scripts/2372-clean-font-families/code)
-4. [Global Font](https://greasyfork.org/en/scripts/419363-%E5%85%A8%E5%B1%80%E5%BE%AE%E8%BD%AF%E9%9B%85%E9%BB%91/code)
+## Performance and Compatibility
 
-### Miscellaneous
-1. [Stylish](https://chromewebstore.google.com/detail/stylish-custom-themes-for/fjnbnpbmkenffdnngjfgmeleoegfcffe)
-2. [Stylus](https://chromewebstore.google.com/detail/stylus/clngdbkpkpeebahjckkjfobafhncgmne)
-3. [xStyle](https://chromewebstore.google.com/detail/xstyle/hncgkmhphmncjohllpoleelnibpmccpj)
+- Removed the bundled 80 KB CSS parser, reducing the page script to approximately 33 KB.
+- Reduced generated `@font-face` rules from 20 to 4 per font using weight ranges.
+- Added incremental stylesheet scanning to detect new rules and dynamically injected styles.
+- Improved font-family classification to handle individual names correctly and avoid accidental partial matches.
+- Migrated to **Manifest V3** for compatibility with current Chromium-based browsers.
+- Uses a dedicated override layer instead of modifying websites' original CSS rules.
+
+## Troubleshooting
+
+If some text still uses an unexpected font:
+
+1. Open the extension popup on the affected website.
+2. Check the list of unrecognized fonts.
+3. Add the missing font and assign it to the appropriate category.
+4. For icon fonts, select **Icon font** to prevent them from being overridden.
+
+Changes are applied dynamically, without requiring a browser restart.
+
+## Development Notes
+
+- Removed the optional `getRemoteCss` feature, which relied on blocking requests on the page's main thread and was disabled by default.
+- Additional font configuration provides an alternative for handling cross-origin font stylesheets.
+- Dynamic font detection uses computed styles to cover cases that cannot be discovered through direct stylesheet inspection alone.
