@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Respect My Eyes - Settings</title>
+<link rel="stylesheet" href="ui.css">
+<style>
+    main { max-width: 760px; margin: 0 auto; padding: 24px 20px 80px; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin: 16px 0; }
+    section > .inner { background: var(--bg); }
+    #saved { position: fixed; right: 18px; bottom: 16px; background: var(--ok); color: #fff; padding: 6px 12px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+    #saved.show { opacity: 1; }
+    .warn { color: var(--danger); }
+    .grid td:first-child { width: 110px; font-weight: 600; }
+    .grid td:nth-child(2) { width: 230px; }
+    .manual-list { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 4px 8px; }
+    .manual-list td:last-child { width: 36px; text-align: right; }
+    .add-row { display: flex; gap: 8px; margin-top: 10px; }
+    .add-row input { flex: 1; }
+</style>
+</head>
+<body>
+<main>
+    <h1>Respect My Eyes</h1>
+    <p class="muted">Settings are saved automatically and applied to open tabs immediately. If a page does not change, reload it.</p>
+
+    <section>
+        <h2>General</h2>
+        <label class="row"><input type="checkbox" id="enabled"> Enable on all sites</label>
+        <p class="small muted" style="margin-top:12px">Never run on these sites (one per line, e.g. <code>example.com</code>, also covers subdomains and embedded frames):</p>
+        <textarea id="excluded" rows="3" spellcheck="false"></textarea>
+    </section>
+
+    <section>
+        <h2>Fonts</h2>
+        <p id="bfStatus"></p>
+        <table class="grid" id="fontGrid"></table>
+        <datalist id="installed"></datalist>
+        <div class="actions">
+            <button id="openBrowserFonts">Open browser font settings</button>
+            <button id="refreshBf">Re-read browser settings</button>
+        </div>
+    </section>
+
+    <section>
+        <h2>Monospace</h2>
+        <table class="grid">
+            <tr><td>Font size</td><td>
+                <select id="sizeMode">
+                    <option value="browser">Browser fixed-width size</option>
+                    <option value="custom">Custom</option>
+                    <option value="off">Don't force a size</option>
+                </select></td>
+                <td><input type="number" id="customSize" min="6" max="72" step="0.5"> px</td></tr>
+            <tr><td>Scaling</td><td>
+                <select id="scaleMode">
+                    <option value="auto">Auto (fixed size / default size)</option>
+                    <option value="custom">Custom</option>
+                    <option value="off">None</option>
+                </select></td>
+                <td><input type="number" id="customScale" min="25" max="200" step="0.25"> %</td></tr>
+        </table>
+        <p class="small muted">Scaling applies to monospace fonts that sites name explicitly (e.g. Consolas) so they are not rendered larger than the browser's own monospace.</p>
+        <label class="row"><input type="checkbox" id="textarea"> Use the monospace font for <code>&lt;textarea&gt;</code></label>
+    </section>
+
+    <section>
+        <h2>Extra fonts</h2>
+        <p>Fonts that cannot be recognised automatically (typically a font stack without any <code>sans-serif</code> / <code>serif</code> / <code>monospace</code> fallback, or CSS loaded from another domain).
+        Enter the font name <em>as the website calls it</em> and pick what it should be replaced with. Choose <strong>Never touch</strong> for icon fonts that get broken.</p>
+        <div class="manual-list"><table id="manualTable"></table></div>
+        <div class="add-row">
+            <input type="text" id="newName" placeholder="Font name, e.g. Gotham">
+            <select id="newCat"></select>
+            <button class="primary" id="addFont">Add</button>
+        </div>
+        <details style="margin-top:12px">
+            <summary>Add many at once</summary>
+            <p class="small muted" style="margin-top:8px">One per line as <code>Name | sans</code>, <code>Name | serif</code>, <code>Name | mono</code> or <code>Name | ignore</code>.
+            The original format (<code>Name|SANS-SERIF</code>, <code>Name|MONOSPACE</code>) is accepted too.</p>
+            <textarea id="bulk" rows="5" spellcheck="false"></textarea>
+            <div class="actions"><button id="bulkAdd">Add these</button></div>
+        </details>
+        <div class="actions"><button id="resetManual" class="danger">Restore default list</button></div>
+    </section>
+
+    <section>
+        <h2>Icon fonts</h2>
+        <p>Built-in detection skips fonts whose name contains words like <em>icon</em>, <em>awesome</em>, <em>glyph</em>, <em>symbol</em> or <em>emoji</em>. Add more words here (one per line, case-insensitive):</p>
+        <textarea id="iconPatterns" rows="3" spellcheck="false"></textarea>
+    </section>
+
+    <section>
+        <h2>Backup</h2>
+        <div class="actions">
+            <button id="export">Export settings</button>
+            <button id="import">Import settings</button>
+            <button id="resetAll" class="danger">Reset everything</button>
+        </div>
+        <input type="file" id="importFile" accept="application/json" hidden>
+    </section>
+</main>
+<div id="saved">Saved</div>
+<script src="common.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

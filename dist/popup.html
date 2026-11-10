@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="ui.css">
+<style>
+    body { width: 340px; padding: 14px; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    h2 { margin: 14px 0 6px; font-size: 13px; }
+    .fonts td:first-child { color: var(--muted); width: 80px; }
+    .unknown { display: flex; gap: 6px; align-items: center; margin: 5px 0; }
+    .unknown .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .unknown select { width: 96px; padding: 3px 4px; }
+    #msg { min-height: 16px; margin-top: 8px; }
+    footer { margin-top: 12px; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+    <header>
+        <strong>Respect My Eyes</strong>
+        <label class="row" style="margin:0"><input type="checkbox" id="enabled"> On</label>
+    </header>
+
+    <div id="site" class="row" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span class="muted small" id="host"></span>
+        <button id="toggleSite"></button>
+    </div>
+
+    <h2>Fonts in use</h2>
+    <table class="fonts small" id="fonts"></table>
+
+    <h2>Unrecognised fonts on this page</h2>
+    <div id="unknown" class="small muted">Scanning...</div>
+
+    <div id="msg" class="small muted"></div>
+
+    <footer>
+        <button id="options">Settings</button>
+        <button id="reload">Reload page</button>
+    </footer>
+<script src="common.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
