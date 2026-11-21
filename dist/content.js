@@ -21,6 +21,11 @@
     const CATS = F.CATS;
     const K = F.KEYS;
 
+    // Monospace fonts an editor was already using when we found them. They stay untouched for the rest of this page's
+    // life (even if settings change), because the editor measured the old font. Survives configure().
+    const lateNames = new Map();
+    const learnQueue = new Set();
+
     let cfg = null;                 // resolved configuration, null while disabled / excluded
     let offReason = "disabled";
 
@@ -89,14 +94,30 @@
         return a;
     }
 
-    function registerNames(a) {
+    /*
+     * @param defer true when the names were found inside a self-measuring editor. A monospace font the editor was
+     *              already using must not be swapped under it (it measured the old one and would draw the cursor in
+     *              the wrong place), unless it is in the base sheet, which is applied before any page script runs.
+     */
+    function registerNames(a, defer) {
         for (let i = 0; i < a.names.length; i++) {
             const n = a.names[i];
 
-            if (CATS.indexOf(n.cat) > -1 && !cfg.chosenLower.has(n.lower) && !acc.faces.has(n.lower)) {
+            if (CATS.indexOf(n.cat) > -1 && !cfg.chosenLower.has(n.lower) && !acc.faces.has(n.lower) && !lateNames.has(n.lower)) {
+                if (defer && n.cat === "mono" && !cfg.preFaces.has(n.lower)) {
+                    lateNames.set(n.lower, n.name);
+                    learnQueue.add(n.name);
+                    continue;
+                }
+
                 acc.faces.set(n.lower, { name: n.name, cat: n.cat });
             }
         }
+    }
+
+    // Our monospace rules must not reach into editors (they would resize / respace text the editor positions by itself)
+    function wrap(css) {
+        return cfg.protectSel ? "@scope (:root) to (" + cfg.protectSel + "){" + css + "}" : css;
     }
 
     function isA(rule, ctor, legacyType) {
@@ -251,7 +272,7 @@
 
                 const cat = F.classifyName(lower, cfg.matchers);
 
-                if (CATS.indexOf(cat) > -1 && !cfg.chosenLower.has(lower) && !acc.faces.has(lower)) {
+                if (CATS.indexOf(cat) > -1 && !cfg.chosenLower.has(lower) && !acc.faces.has(lower) && !lateNames.has(lower)) {
                     acc.faces.set(lower, { name: family, cat: cat });
                     changed = true;
                 }
@@ -274,9 +295,12 @@
         const out = [];
 
         cfg.settings.manualFonts.forEach(function (f) {
-            if (CATS.indexOf(f.category) > -1 && !cfg.chosenLower.has(F.norm(f.name))) out.push(faceCss(f.name, f.category));
+            const k = F.norm(f.name);
+            if (CATS.indexOf(f.category) > -1 && !cfg.chosenLower.has(k) && !lateNames.has(k)) out.push(faceCss(f.name, f.category));
         });
-        out.push(F.monoDefaultsCss(cfg));
+        cfg.seedNames.forEach(function (name) { out.push(faceCss(name, "mono")); });
+
+        out.push(wrap(F.monoDefaultsCss(cfg)));
 
         return out.join("\n");
     }
@@ -311,7 +335,7 @@
 
             const selectors = Array.from(acc.sel[cat]).join(",");
 
-            out.push(cat === "mono" ? F.monoRule(selectors, cfg) : selectors + "{font-family:" + F.familyValue(cat, cfg.fonts) + "!important}");
+            out.push(cat === "mono" ? wrap(F.monoRule(selectors, cfg)) : selectors + "{font-family:" + F.familyValue(cat, cfg.fonts) + "!important}");
         });
 
         out.push.apply(out, acc.vars);
@@ -372,6 +396,19 @@
 
     let sampling = false, sampleAgain = false, sampledKeys, sampledOnce;
 
+    // Tell the service worker which monospace fonts editors revealed, so they are applied from the first paint next time
+    function flushLearn() {
+        if (!learnQueue.size) return;
+
+        const names = Array.from(learnQueue);
+        learnQueue.clear();
+
+        if (!cfg || !cfg.settings.editors.autoLearn) return;
+
+        try { chrome.runtime.sendMessage({ type: "rme:learn", names: names }, function () { void chrome.runtime.lastError; }); }
+        catch (e) { /* orphaned */ }
+    }
+
     function sample() {
         if (sampling) { sampleAgain = true; return; }
         if (!document.body) return;
@@ -399,7 +436,7 @@
 
                 if (a) {
                     const before = acc.faces.size;
-                    registerNames(a);
+                    registerNames(a, !!cfg.protectSel && el.closest(cfg.protectSel) !== null);
                     if (acc.faces.size !== before) added = true;
                 }
             }
@@ -407,6 +444,7 @@
             if (i < max) { setTimeout(chunk, 0); return; }
 
             sampling = false;
+            flushLearn();
 
             if (added) { readPageFaces(); rebuild(); deleteFontFaces(); }
             if (sampleAgain) { sampleAgain = false; sample(); }
@@ -500,6 +538,19 @@
 
         const r = F.resolveFonts(settings, bf);
 
+        // Editors to protect: only valid selectors, and only where @scope exists (Chrome 118+)
+        const protectSel = settings.editors.protect && typeof CSSScopeRule !== "undefined"
+            ? settings.editors.selectors.filter(function (x) {
+                if (settings.editors.off.indexOf(x) > -1) return false;        // switched off from the popup
+                try { return !self.CSS || !CSS.supports || CSS.supports("selector(" + x + ")"); } catch (e) { return false; }
+            }).join(",") : "";
+
+        const manualAll = new Set(settings.manualFonts.map(function (f) { return F.norm(f.name); }));
+        const chosen = new Set(F.CATS.map(function (c) { return F.norm(r.fonts[c].name); }));
+        const seedNames = settings.mono.seed
+            ? settings.mono.seedNames.filter(function (n) { const k = F.norm(n); return !manualAll.has(k) && !chosen.has(k) && !lateNames.has(k); })
+            : [];
+
         cfg = {
             settings: settings,
             fonts: r.fonts,
@@ -507,8 +558,13 @@
             monoScale: r.monoScale,
             matchers: F.buildMatchers(settings),
             chosenLower: new Set(F.CATS.map(function (c) { return F.norm(r.fonts[c].name); })),
-            manualFaces: new Set(settings.manualFonts.filter(function (f) { return CATS.indexOf(f.category) > -1; }).map(function (f) { return F.norm(f.name); }))
+            protectSel: protectSel,
+            seedNames: seedNames,
+            // everything already declared in the base sheet, i.e. in place before any page script runs
+            preFaces: new Set(settings.manualFonts.filter(function (f) { return CATS.indexOf(f.category) > -1 && !lateNames.has(F.norm(f.name)); })
+                .map(function (f) { return F.norm(f.name); }).concat(seedNames.map(F.norm)))
         };
+        cfg.manualFaces = cfg.preFaces;
 
         baseCss = buildBaseCss();
         baseSink.set(baseCss);
@@ -548,10 +604,32 @@
     }
     catch (e) { /* orphaned */ }
 
+    function describe(el) {
+        const cls = (typeof el.className === "string" ? el.className : "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
+
+        return (el.localName + (el.id ? "#" + el.id : "") + (cls.length ? "." + cls.join(".") : "")).slice(0, 60);
+    }
+
     function buildReport() {
-        const report = { host: location.hostname, active: !!cfg, reason: offReason, unknown: [] };
+        const report = { host: location.hostname, active: !!cfg, reason: offReason, unknown: [], deferred: [], editors: [], protect: true };
 
         if (!cfg) return report;
+
+        // Which editors are on this page, so the popup can name them and offer a switch for each
+        const ed = cfg.settings.editors;
+        report.protect = !!ed.protect;
+        report.editors = [];
+
+        ed.selectors.forEach(function (sel) {
+            try {
+                const found = document.querySelectorAll(sel);
+
+                if (found.length) report.editors.push({ selector: sel, count: found.length, sample: describe(found[0]), enabled: ed.protect && ed.off.indexOf(sel) === -1 });
+            }
+            catch (e) { /* invalid selector */ }
+        });
+        report.deferred = Array.from(lateNames.values());
+        report.learned = !!cfg.settings.editors.autoLearn;
 
         const counts = new Map();
         const els = document.querySelectorAll("*");

@@ -12,7 +12,7 @@
 
     const CATS = ["sans", "serif", "mono"];
     const MANUAL_CATS = ["sans", "serif", "mono", "ignore"];
-    const CAT_LABEL = { sans: "Sans-serif", serif: "Serif", mono: "Monospace", ignore: "Never touch (icon font)" };
+    const CAT_LABEL = { sans: "Sans-serif", serif: "Serif", mono: "Monospace", ignore: "Icon font" };
     const GENERIC_FALLBACK = { sans: "sans-serif", serif: "serif", mono: "monospace" };
 
     // Used only when chrome.fontSettings is unavailable and the user did not pick a custom font
@@ -43,8 +43,17 @@
         ["Poppins", "sans"]                 // fantasypros.com
     ].map(function (f) { return { name: f[0], category: f[1] }; });
 
+    // Names code editors ask for by default. Applying them before the page's scripts run means an editor measures
+    // our font from the start, instead of measuring the site's font and being surprised later.
+    const MONO_SEED = [
+        "Consolas", "Courier New", "Courier", "Menlo", "Monaco", "Droid Sans Mono", "DejaVu Sans Mono", "Liberation Mono",
+        "Lucida Console", "SF Mono", "SFMono-Regular", "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Fira Code",
+        "Fira Mono", "Source Code Pro", "Roboto Mono", "Ubuntu Mono", "IBM Plex Mono", "Inconsolata", "Hack",
+        "Noto Sans Mono", "Andale Mono"
+    ];
+
     const DEFAULT_SETTINGS = {
-        version: 2,
+        version: 3,
         enabled: true,
         excludedSites: [],
         fonts: {
@@ -57,7 +66,17 @@
             customSize: 13,
             scaleMode: "auto",      // auto | custom | off     (size-adjust for monospace @font-face overrides)
             customScale: 81.25,
-            textarea: true          // treat <textarea> as monospace
+            textarea: false,        // force the monospace font on <textarea> (opt-in: many sites mirror their text boxes)
+            seed: true,             // apply the names below from the very first paint
+            seedNames: MONO_SEED.slice()
+        },
+        // Components that measure their own font (cursor / selection / column math). They are exempt from our forced
+        // size and letter-spacing, and fonts they only reveal late are not swapped under them.
+        editors: {
+            protect: true,
+            autoLearn: true,        // a monospace font an editor reveals late is remembered and applied from the first paint next time
+            off: [],                // selectors from the list below that the user switched off (e.g. from the popup)
+            selectors: [".monaco-editor", ".cm-editor", ".CodeMirror", ".ace_editor", ".xterm", "[contenteditable]"]
         },
         manualFonts: DEFAULT_MANUAL_FONTS,
         iconPatterns: []            // extra case-insensitive substrings that mark a font as an icon font
@@ -233,13 +252,65 @@
         return out;
     }
 
+    // CSS selectors typed by the user: reject anything that could break out of a selector
+    function cleanSelectors(list) {
+        const seen = new Set(), out = [];
+        (Array.isArray(list) ? list : []).forEach(function (x) {
+            x = String(x || "").trim();
+            if (x && x.length <= 200 && !/[{};@\\]/.test(x) && !seen.has(x) && out.length < 40) { seen.add(x); out.push(x); }
+        });
+        return out;
+    }
+
+    function cleanNameList(list) {
+        const seen = new Set(), out = [];
+        (Array.isArray(list) ? list : []).forEach(function (x) {
+            x = String(x || "").trim().replace(/["\\]/g, "").slice(0, 120);
+            const k = norm(x);
+            if (x && !seen.has(k) && out.length < 200) { seen.add(k); out.push(x); }
+        });
+        return out;
+    }
+
+    const CAT_ALIASES = {
+        "sans": "sans", "sans-serif": "sans", "sansserif": "sans", "serif": "serif",
+        "mono": "mono", "monospace": "mono", "ignore": "ignore", "icon": "ignore", "icon font": "ignore"
+    };
+
+    /*
+     * Parses a pasted list: one font per line, optional category after "|" or a tab (spreadsheet paste).
+     * Lines without a category get defCat. Accepts the old "Name|SANS-SERIF" format. "#" starts a comment.
+     * @return { entries: [{name, category}] (de-duplicated, last wins), invalid: [{line, text, reason}] }
+     */
+    function parseFontLines(text, defCat) {
+        const map = new Map(), invalid = [];
+
+        String(text || "").split(/\r?\n/).forEach(function (line, i) {
+            const raw = line.trim();
+            if (!raw || raw.charAt(0) === "#") return;
+
+            const parts = raw.split(/\s*[|\t]\s*/);
+            const name = parts[0].replace(/^["']|["']$/g, "").replace(/["\\]/g, "").trim().slice(0, 120);
+            let category = defCat;
+
+            if (!name) { invalid.push({ line: i + 1, text: raw, reason: "Empty name" }); return; }
+
+            if (parts.length > 1 && parts[1].trim()) {
+                category = CAT_ALIASES[parts[1].trim().toLowerCase()];
+                if (!category) { invalid.push({ line: i + 1, text: raw, reason: "Unknown category \"" + parts[1].trim() + "\"" }); return; }
+            }
+            map.set(norm(name), { name: name, category: category });
+        });
+        return { entries: Array.from(map.values()), invalid: invalid };
+    }
+
     function cleanManual(list) {
         const seen = new Set(), out = [];
         list.forEach(function (f) {
             if (!f || typeof f.name !== "string") return;
             const name = f.name.trim().replace(/["\\]/g, "").slice(0, 120);
             const key = norm(name);
-            if (!name || seen.has(key) || MANUAL_CATS.indexOf(f.category) === -1) return;
+            if (!name || seen.has(key) || MANUAL_CATS.indexOf(f.category) === -1 || out.length >= 500) return;
             seen.add(key);
             out.push({ name: name, category: f.category });
         });
@@ -249,6 +320,8 @@
     function normalizeSettings(raw) {
         const s = clone(DEFAULT_SETTINGS);
         if (!raw || typeof raw !== "object") return s;
+
+        const ver = typeof raw.version === "number" ? raw.version : 2;     // < 3: textarea forcing was on by default
 
         s.enabled = raw.enabled !== false;
         s.excludedSites = cleanHostList(raw.excludedSites);
@@ -267,7 +340,20 @@
             s.mono.customSize = num(m.customSize, 13, 6, 72);
             s.mono.scaleMode = ["auto", "custom", "off"].indexOf(m.scaleMode) > -1 ? m.scaleMode : "auto";
             s.mono.customScale = num(m.customScale, 81.25, 25, 200);
-            s.mono.textarea = m.textarea !== false;
+            s.mono.textarea = ver >= 3 && m.textarea === true;
+            s.mono.seed = m.seed !== false;
+            if (Array.isArray(m.seedNames)) s.mono.seedNames = cleanNameList(m.seedNames);
+        }
+
+        const e = raw.editors;
+        if (e && typeof e === "object") {
+            s.editors.protect = e.protect !== false;
+            s.editors.autoLearn = e.autoLearn !== false;
+            if (Array.isArray(e.off)) s.editors.off = cleanSelectors(e.off);
+            if (Array.isArray(e.selectors)) {
+                s.editors.selectors = cleanSelectors(e.selectors);
+                if (ver < 3 && s.editors.selectors.indexOf("[contenteditable]") === -1) s.editors.selectors.push("[contenteditable]");
+            }
         }
 
         if (Array.isArray(raw.manualFonts)) s.manualFonts = cleanManual(raw.manualFonts);
@@ -419,7 +505,7 @@
     }
 
     root.RME = {
-        KEYS: KEYS, CATS: CATS, MANUAL_CATS: MANUAL_CATS, CAT_LABEL: CAT_LABEL, GENERIC_FALLBACK: GENERIC_FALLBACK,
+        KEYS: KEYS, MONO_SEED: MONO_SEED, cleanSelectors: cleanSelectors, cleanNameList: cleanNameList, parseFontLines: parseFontLines, CATS: CATS, MANUAL_CATS: MANUAL_CATS, CAT_LABEL: CAT_LABEL, GENERIC_FALLBACK: GENERIC_FALLBACK,
         DEFAULT_SETTINGS: DEFAULT_SETTINGS, DEFAULT_MANUAL_FONTS: DEFAULT_MANUAL_FONTS,
         norm: norm, cssQuote: cssQuote, cleanHost: cleanHost, cleanHostList: cleanHostList, cleanManual: cleanManual,
         buildMatchers: buildMatchers, classifyName: classifyName, splitFamilies: splitFamilies,

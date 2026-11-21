@@ -93,7 +93,41 @@ if (chrome.fontSettings) {
     });
 }
 
+// Editors reveal monospace fonts late; remember them so the next load applies them from the first paint.
+// Serialized, because several frames can report at once and storage has no atomic read-modify-write.
+let learnChain = Promise.resolve();
+
+function learn(names) {
+    learnChain = learnChain.then(async function () {
+        const data = await chrome.storage.local.get(F.KEYS.settings);
+        const s = F.normalizeSettings(data[F.KEYS.settings]);
+
+        if (!s.editors.autoLearn) return;
+
+        const have = new Set(s.manualFonts.map(function (f) { return F.norm(f.name); }));
+        let changed = false;
+
+        names.slice(0, 20).forEach(function (n) {
+            n = String(n).slice(0, 120);
+            const k = F.norm(n);
+            if (k && !have.has(k)) { s.manualFonts.push({ name: n, category: "mono" }); have.add(k); changed = true; }
+        });
+
+        if (changed) {
+            s.manualFonts = F.cleanManual(s.manualFonts);
+            await chrome.storage.local.set({ [F.KEYS.settings]: s });
+        }
+    }).catch(function () { /* keep the chain alive */ });
+
+    return learnChain;
+}
+
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+    if (msg && msg.type === "rme:learn" && Array.isArray(msg.names)) {
+        learn(msg.names).then(function () { sendResponse(true); });
+        return true;
+    }
+
     if (msg && msg.type === "rme:refresh") {
         refresh().then(sendResponse, function () { sendResponse(null); });
         return true;

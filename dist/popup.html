@@ -2,42 +2,69 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
 <link rel="stylesheet" href="ui.css">
 <style>
-    body { width: 340px; padding: 14px; }
-    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-    h2 { margin: 14px 0 6px; font-size: 13px; }
-    .fonts td:first-child { color: var(--muted); width: 80px; }
-    .unknown { display: flex; gap: 6px; align-items: center; margin: 5px 0; }
-    .unknown .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .unknown select { width: 96px; padding: 3px 4px; }
-    #msg { min-height: 16px; margin-top: 8px; }
-    footer { margin-top: 12px; display: flex; justify-content: space-between; }
+    body { width: 360px; padding: 14px 14px 12px; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+    .brand img { width: 20px; height: 20px; border-radius: 5px; }
+    h2 { margin: 16px 0 6px; }
+    #app { transition: opacity .2s; }
+    #app.off { opacity: .45; pointer-events: none; }
+
+    .site { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+    .site .host { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .site .text { min-width: 0; }
+    .site .hint { margin: 0; }
+    #note { padding: 10px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    .banner { margin-top: 10px; }
+
+    .font-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 6px 10px; margin: 0 0 4px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+    .font-item .kind { width: 62px; font-size: 12px; color: var(--muted); }
+    .font-item .face { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+
+    .card2 { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px 10px; margin-bottom: 6px; animation: fade-in .2s ease; transition: opacity .18s, transform .18s; }
+    .card2.gone { opacity: 0; transform: translateX(12px); }
+    .card2 .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .card2 .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card2 .bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .seg button { padding: 3px 9px; font-size: 12px; }
+
+    .ed { display: flex; align-items: center; gap: 12px; padding: 7px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 4px; }
+    .ed .text { flex: 1; min-width: 0; }
+    .ed code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: fit-content; max-width: 100%; }
+    .ed .hint { margin-top: 2px; }
+    footer { display: flex; justify-content: space-between; margin-top: 14px; }
+    #toasts { bottom: 10px; }
 </style>
 </head>
 <body>
-    <header>
-        <strong>Respect My Eyes</strong>
-        <label class="row" style="margin:0"><input type="checkbox" id="enabled"> On</label>
-    </header>
+<header>
+    <div class="brand"><img src="icon-32.png" alt=""><strong>Respect My Eyes</strong></div>
+    <label class="switch" title="Turn the extension on or off"><input type="checkbox" id="enabled" aria-label="Enabled"><span></span></label>
+</header>
 
-    <div id="site" class="row" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <span class="muted small" id="host"></span>
-        <button id="toggleSite"></button>
+<div id="app">
+    <div id="site" class="site" hidden>
+        <div class="text"><div class="host" id="host"></div><div class="hint" id="siteHint"></div></div>
+        <label class="switch" title="Use on this site"><input type="checkbox" id="siteOn" aria-label="Use on this site"><span></span></label>
     </div>
+    <div id="note" hidden></div>
 
-    <h2>Fonts in use</h2>
-    <table class="fonts small" id="fonts"></table>
+    <div id="banner" class="banner" hidden><span id="bannerText">Reload the page to apply this.</span><button id="reload" class="primary sm">Reload</button></div>
 
-    <h2>Unrecognised fonts on this page</h2>
-    <div id="unknown" class="small muted">Scanning...</div>
+    <h2>Fonts</h2>
+    <div id="fonts"></div>
 
-    <div id="msg" class="small muted"></div>
+    <section id="attention" hidden><h2>Needs your input</h2><div id="unknown"></div></section>
+    <section id="editorsBox" hidden><h2>Editors on this page</h2><div id="editors"></div></section>
+</div>
 
-    <footer>
-        <button id="options">Settings</button>
-        <button id="reload">Reload page</button>
-    </footer>
+<footer>
+    <button id="options" class="ghost">Settings</button>
+</footer>
+<div id="toasts"></div>
 <script src="common.js"></script>
 <script src="popup.js"></script>
 </body>

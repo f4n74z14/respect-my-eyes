@@ -1,0 +1,161 @@
+// Run: node tests/common.test.js
+const assert = require("assert");
+global.self = global;
+require("../dist/common.js");
+const F = self.RME;
+
+const settings = F.normalizeSettings(null);
+const m = F.buildMatchers(settings);
+const a = (v) => F.analyzeStack(v, m);
+
+let n = 0;
+function t(name, fn) { fn(); n++; }
+
+t("classifies single names", () => {
+    assert.strictEqual(F.classifyName("arial", m), "sans");
+    assert.strictEqual(F.classifyName("georgia", m), "serif");
+    assert.strictEqual(F.classifyName("consolas", m), "mono");
+    assert.strictEqual(F.classifyName("roboto mono", m), "mono");
+    assert.strictEqual(F.classifyName("roboto slab", m), null);
+    assert.strictEqual(F.classifyName("sfmono-regular", m), "mono");
+    assert.strictEqual(F.classifyName("monotype corsiva", m), null);
+    assert.strictEqual(F.classifyName("font awesome 5 free", m), "icon");
+    assert.strictEqual(F.classifyName("material icons", m), "icon");
+    assert.strictEqual(F.classifyName("segoe ui emoji", m), "icon");
+    assert.strictEqual(F.classifyName("segoe ui", m), "sans");
+    assert.strictEqual(F.classifyName("source serif pro", m), "serif");
+    assert.strictEqual(F.classifyName("noto sans mono", m), "mono");
+    assert.strictEqual(F.classifyName("internal", m), null);          // original unanchored /inter/ would match
+});
+
+t("splits families respecting quotes", () => {
+    const s = F.splitFamilies('"Segoe UI", \'Helvetica Neue\' , Arial !important, sans-serif');
+    assert.deepStrictEqual(s.map(x => x.name), ["Segoe UI", "Helvetica Neue", "Arial", "sans-serif"]);
+    assert.deepStrictEqual(s.map(x => x.generic), [false, false, false, true]);
+    assert.strictEqual(F.splitFamilies('"sans-serif"')[0].generic, false);   // quoted = real family name
+});
+
+t("analyzes stacks", () => {
+    let r = a('-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Apple Color Emoji", sans-serif');
+    assert.strictEqual(r.cat, "sans");
+    assert.strictEqual(r.names.find(x => x.lower === "apple color emoji").cat, "icon");
+
+    r = a("Arial, monospace");                         // contradictory stack: first family wins
+    assert.strictEqual(r.cat, "sans");
+
+    r = a('"Foobarface", sans-serif');                   // unknown name inherits category from fallback
+    assert.strictEqual(r.cat, "sans"); assert.strictEqual(r.names[0].inferred, true); assert.strictEqual(r.unknown, null);
+
+    r = a("Whitney");                                  // in manual list
+    assert.strictEqual(r.cat, "sans");
+
+    r = a("Totallyunknownface");                       // no fallback, not in list -> reported as missing
+    assert.strictEqual(r.cat, null); assert.strictEqual(r.unknown, "Totallyunknownface");
+
+    r = a('FontAwesome, sans-serif');
+    assert.strictEqual(r.cat, "skip");
+
+    r = a("sans-serif");
+    assert.strictEqual(r.pure, true); assert.strictEqual(r.cat, "sans");
+
+    r = a("system-ui, sans-serif");
+    assert.strictEqual(r.pure, false);
+
+    assert.strictEqual(a("inherit"), null);
+    assert.strictEqual(a("var(--font)"), null);
+    assert.strictEqual(a("cursive").cat, null);
+});
+
+t("custom property detection", () => {
+    assert.ok(F.looksLikeFontStack('"Inter", system-ui, sans-serif', "--x"));
+    assert.ok(F.looksLikeFontStack("Arial", "--font-body"));
+    assert.ok(!F.looksLikeFontStack("16px", "--font-size"));
+    assert.ok(!F.looksLikeFontStack("bold", "--font-weight"));
+    assert.ok(!F.looksLikeFontStack("red", "--brand"));
+    assert.ok(!F.looksLikeFontStack("0 0 4px rgba(0,0,0,.2)", "--shadow"));
+});
+
+t("settings normalisation", () => {
+    const s = F.normalizeSettings({ enabled: false, excludedSites: ["https://Example.com/path", "*.foo.org", "", "example.com"],
+        fonts: { sans: { mode: "custom", custom: ' "Inter" ' }, serif: { mode: "bogus" } },
+        mono: { sizeMode: "nope", customSize: 500 },
+        manualFonts: [{ name: "Foo", category: "mono" }, { name: "foo", category: "sans" }, { name: "Bar", category: "x" }, null] });
+    assert.strictEqual(s.enabled, false);
+    assert.deepStrictEqual(s.excludedSites, ["example.com", "foo.org"]);
+    assert.strictEqual(s.fonts.sans.custom, "Inter");
+    assert.strictEqual(s.fonts.serif.mode, "browser");
+    assert.strictEqual(s.mono.sizeMode, "browser");
+    assert.strictEqual(s.mono.customSize, 72);
+    assert.deepStrictEqual(s.manualFonts, [{ name: "Foo", category: "mono" }]);
+    assert.ok(F.normalizeSettings("garbage").manualFonts.length > 10);
+});
+
+t("editor settings are validated", () => {
+    const d = F.normalizeSettings(null);
+    assert.strictEqual(d.editors.protect, true);
+    assert.ok(d.editors.selectors.includes(".monaco-editor") && d.mono.seed === true);
+    const e = F.normalizeSettings({ version: 3, editors: { protect: false, selectors: [" .my-editor ", "a{color:red}", ".x;y", "@import", ".my-editor", ""] } });
+    assert.strictEqual(e.editors.protect, false);
+    assert.deepStrictEqual(e.editors.selectors, [".my-editor"]);
+});
+
+t("old settings are migrated", () => {
+    const m = F.normalizeSettings({ version: 2, mono: { textarea: true, sizeMode: "custom", customSize: 15 }, editors: { selectors: [".monaco-editor"] } });
+    assert.strictEqual(m.mono.textarea, false, "textarea forcing was the old default and must not survive");
+    assert.strictEqual(m.mono.customSize, 15, "other values are kept");
+    assert.ok(m.editors.selectors.includes(".monaco-editor") && m.editors.selectors.includes("[contenteditable]"));
+    assert.strictEqual(F.normalizeSettings({ version: 3, mono: { textarea: true } }).mono.textarea, true, "explicit opt-in is respected");
+    assert.deepStrictEqual(F.normalizeSettings({ mono: { seedNames: [" Foo ", "foo", 'B"ar', ""] } }).mono.seedNames, ["Foo", "Bar"]);
+    assert.strictEqual(F.DEFAULT_SETTINGS.mono.textarea, false);
+});
+
+t("parses pasted font lists", () => {
+    const r = F.parseFontLines('Open Sans | sans\n"Fira Code"|MONOSPACE\nGotham\nWingdings\ticon\n# comment\nBad | wat\n | sans\nopen sans | serif\n', "serif");
+    assert.deepStrictEqual(r.entries, [
+        { name: "open sans", category: "serif" },        // duplicate name: last wins
+        { name: "Fira Code", category: "mono" },
+        { name: "Gotham", category: "serif" },           // default category
+        { name: "Wingdings", category: "ignore" }]);
+    assert.deepStrictEqual(r.invalid.map(x => [x.line, x.reason]), [[6, 'Unknown category "wat"'], [7, "Empty name"]]);
+    assert.deepStrictEqual(F.normalizeSettings({ version: 3, editors: { off: [".a", "x{", ".a"] } }).editors.off, [".a"]);
+});
+
+t("exclusion matching", () => {
+    assert.ok(F.isExcluded("www.example.com", ["example.com"]));
+    assert.ok(F.isExcluded("example.com", ["example.com"]));
+    assert.ok(!F.isExcluded("notexample.com", ["example.com"]));
+    assert.ok(!F.isExcluded("", ["example.com"]));
+});
+
+t("resolves fonts from browser settings", () => {
+    const bf = { available: true, standard: "Times New Roman", serif: "Georgia", sansserif: "Verdana", fixed: "Consolas", fixedSize: 13, defaultSize: 16 };
+    let r = F.resolveFonts(settings, bf);
+    assert.deepStrictEqual([r.fonts.sans.name, r.fonts.serif.name, r.fonts.mono.name], ["Verdana", "Georgia", "Consolas"]);
+    assert.strictEqual(r.fonts.sans.source, "browser");
+    assert.strictEqual(r.monoSize, 13);
+    assert.strictEqual(r.monoScale, 81.25);                                 // identical to the old hard-coded value
+
+    const s2 = F.normalizeSettings({ fonts: { sans: { mode: "custom", custom: "Inter" } }, mono: { sizeMode: "off", scaleMode: "off" } });
+    r = F.resolveFonts(s2, bf);
+    assert.deepStrictEqual([r.fonts.sans.name, r.fonts.sans.source], ["Inter", "custom"]);
+    assert.strictEqual(r.monoSize, null); assert.strictEqual(r.monoScale, null);
+
+    r = F.resolveFonts(settings, null);                                     // API unavailable -> original defaults
+    assert.deepStrictEqual([r.fonts.sans.name, r.fonts.serif.name, r.fonts.mono.name], ["Arial", "Georgia", "Courier New"]);
+
+    r = F.resolveFonts(settings, { available: true, sansserif: "A", serif: "B", fixed: "C", fixedSize: 16, defaultSize: 16 });
+    assert.strictEqual(r.monoScale, null);                                  // 100% = no size-adjust
+});
+
+t("generates compact @font-face rules", () => {
+    const css = F.fontFaceCss("Open Sans", "mono", "Consolas", 81.25);
+    assert.strictEqual(css.split("\n").length, 4);
+    assert.ok(css.includes("font-weight:400;font-style:normal") && css.includes("font-weight:700;font-style:italic") && F.isStandardFace({ weight: "700", style: "italic", stretch: "normal" }) && !F.isStandardFace({ weight: "500", style: "normal", stretch: "normal" }) && !F.isStandardFace({ weight: "400", style: "normal", stretch: "50%" }));
+    assert.ok(css.includes('font-family:"Open Sans"'));
+    assert.ok(css.includes('local("Consolas Bold")'));
+    assert.ok(css.includes("size-adjust:81.25%"));
+    assert.ok(!F.fontFaceCss("X", "sans", "Arial", 81.25).includes("size-adjust"));
+    assert.ok(!F.cssQuote('a"b\\c').includes('\\'));
+});
+
+console.log("common.test.js: " + n + " groups passed");

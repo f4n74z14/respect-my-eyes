@@ -21,8 +21,9 @@ Works in Chromium-based browsers. Browsers that don't implement `chrome.fontSett
 
 ## Custom Font Support
 
-- **Popup:** scans the current website for unrecognized fonts and lets you classify them as sans-serif, serif, monospace, or protected icon fonts. Changes apply immediately.
-- **Settings page:** provides an editable list of additional fonts, including support for bulk imports using the `Name|SANS-SERIF` format.
+- **Popup:** shows the site switch, the fonts in use, the unrecognized fonts of the page (pick Sans / Serif / Mono / Icon and press Add), and the code editors found on the page, named by element, with a switch for each. Changes apply immediately.
+- **Settings page:** sticky section navigation, a live preview of the chosen fonts, and an editable list of additional fonts with filter and sorting. **Import list** opens a dialog with a live preview of what will be added, changed or ignored; the old `Name|SANS-SERIF` format still works.
+- Destructive actions (remove, restore defaults, import, reset) apply instantly and show an **Undo** toast instead of a confirmation dialog.
 - Configure monospace font size and scaling.
 - Exclude specific websites.
 - Add custom icon font keywords.
@@ -51,6 +52,16 @@ Replacements are applied through `@font-face` overrides using `local()` fonts. I
 - Migrated to **Manifest V3** for compatibility with current Chromium-based browsers.
 - Uses dedicated constructed stylesheets as an override layer instead of modifying websites' original CSS rules (the page's own `@font-face` rules are removed only for families that are being replaced).
 
+## Code Editors and Text Boxes
+
+Editors (Monaco, CodeMirror, Ace, xterm) and rich text boxes measure the width of a character themselves, or mirror their text into a second element, and use that to place the cursor and selection. Changing their font or size behind their back makes the cursor drift away from the text. To avoid that:
+
+- Our forced monospace size and letter-spacing never reach inside protected containers (done with `@scope (:root) to (...)`, Chrome 118+). The container list is editable in settings. Defaults: `.monaco-editor`, `.cm-editor`, `.CodeMirror`, `.ace_editor`, `.xterm`, `[contenteditable]`.
+- `<textarea>` is **not** forced to monospace any more (opt-in switch in settings); many sites, Google Search AI mode among them, mirror their text boxes.
+- Monospace fonts are replaced from the very first paint, before any page script runs, so an editor measures your font from the start. This covers every monospace font in *Extra fonts* plus an editable list of well-known names (Consolas, Menlo, JetBrains Mono...).
+- **Self-learning.** A monospace font that an editor was already using when we discovered it is not swapped under it (it measured and cached the old one). It is remembered automatically (can be switched off), so after one reload it is applied from the first paint like the rest of your list. The popup shows these fonts.
+- If an editor keeps the site's configured size, set *Scaling* to *None* in the monospace settings.
+
 ## Troubleshooting
 
 If some text still uses an unexpected font:
@@ -59,6 +70,8 @@ If some text still uses an unexpected font:
 2. Check the list of unrecognized fonts.
 3. Add the missing font and assign it to the appropriate category.
 4. For icon fonts, select **Icon font** to prevent them from being overridden.
+
+If the cursor of an editor or text box is misplaced, see *Code Editors and Text Boxes* above: add the element's root selector to the protected list.
 
 Changes are applied dynamically, without requiring a browser restart. Re-enabling a site or un-hiding an icon font may need a page reload.
 
@@ -80,3 +93,4 @@ Settings from older builds (`settings`, `browserFonts`) are migrated automatical
 - Removed the optional `getRemoteCss` feature, which relied on blocking requests on the page's main thread and was disabled by default.
 - The additional font list and the dynamic detection above replace it for cross-origin stylesheets.
 - Shared logic (classification, settings, CSS generation) lives in `dist/common.js` without DOM or `chrome.*` dependencies, which keeps it unit-testable.
+- Tests: `node tests/common.test.js`, `node tests/background.test.js`, `node tests/ui.test.js`, and `npm i jsdom && node tests/content.test.js` (the last two run the real content script against a simulated CSSOM, so verify changes in a real browser too).
