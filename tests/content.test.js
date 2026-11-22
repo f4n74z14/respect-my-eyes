@@ -55,7 +55,7 @@ function setup({ settings, bf, fonts = [], editor = false, host = "https://site.
   w.chrome = {
     runtime: { lastError: null, onMessage: { addListener: fn => (w.__onMessage = fn) }, sendMessage: (m, cb) => { w.__sent.push(m); cb && cb(); } },
     storage: {
-      local: { get: (keys, cb) => cb({ rmeSettings: store.settings, rmeBrowserFonts: store.browserFonts }) },
+      local: { get: () => Promise.resolve({ rmeSettings: store.settings, rmeBrowserFonts: store.browserFonts }) },
       onChanged: { addListener: fn => listeners.push(fn) }
     }
   };
@@ -69,7 +69,7 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
 
 (async () => {
   // --- 0. variable fonts from a blocked stylesheet: descriptors replicated from document.fonts -----------------------
-  let ev = setup({ settings: undefined, bf: BF, fonts: [
+  const ev = setup({ settings: undefined, bf: BF, fonts: [
     { family: '"Google Sans Flex"', weight: "1 1000", style: "normal", stretch: "25% 151%" },
     { family: "Google Sans Code", weight: "300 800", style: "italic", stretch: "100%" },
     { family: "Inter", weight: "500", style: "normal", stretch: "normal" },
@@ -137,7 +137,7 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   // --- 4. custom font beats browser, generic-only stacks are forced then --------------------------------------------
   env = setup({ settings: { fonts: { sans: { mode: "custom", custom: "Inter" } }, mono: { sizeMode: "custom", customSize: 15, scaleMode: "off" } }, bf: BF });
   await wait(400);
-  let [b2, s2] = env.sheets();
+  const [b2, s2] = env.sheets();
   assert.ok(b2.includes('local("Inter")'), "custom sans used");
   assert.ok(/\.plain[^{]*\{font-family:"Inter", sans-serif!important/.test(s2), "generic-only stack forced when custom font set");
   assert.ok(b2.includes("font-size:15px") && !s2.includes("size-adjust"), "custom mono size, scaling off");
@@ -167,19 +167,22 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   await wait(500);
   assert.ok(env.sheets()[1].includes('font-family:"Tahoma"'), "late stylesheet processed incrementally");
 
-  // --- 8. editors: protected from forced size, seeded names, late fonts deferred --------------------------------------
+  // --- 8. editors: found automatically, protected from forced size, late fonts deferred ---------------------------------
   env = setup({ settings: undefined, bf: BF, editor: true });
   await wait(500);
   const [b8, s8] = env.sheets();
-  assert.ok(/@scope \(:root\) to \(\.monaco-editor,\.cm-editor,\.CodeMirror,\.ace_editor,\.xterm,\[contenteditable\]\)\{pre,code/.test(b8), "mono defaults are scoped away from editors");
+  const PROXY = ':is(textarea,[contenteditable],[role="textbox"])[autocorrect="off"][spellcheck="false"]';
+  assert.ok(b8.includes("@scope (:root) to (" + PROXY + ",:has(> " + PROXY + ")"), "boundary is the hidden input element, no class names needed");
+  assert.ok(/@scope[^{]*\.monaco-editor,\.cm-editor,\.CodeMirror,\.ace_editor,\.xterm\)\{pre,code/.test(b8), "mono defaults are scoped away from editors");
   assert.ok(/@scope[^{]*\{code\.hl[^}]*font-size:13px/.test(s8), "page-derived mono rules are scoped away from editors too");
+  assert.ok(b8.includes("@keyframes rme-seen") && b8.includes(PROXY + "{animation:rme-seen .001s}"), "detector for editors that appear later");
   assert.ok(b8.includes('font-family:"JetBrains Mono"') && b8.includes('font-family:"Menlo"'), "well-known monospace names applied from the first paint");
   assert.ok(!b8.includes('@font-face{font-family:"Consolas"'), "chosen font itself is not seeded");
   assert.ok(!s8.includes('"Editor Only Mono"'), "late monospace font found inside an editor is NOT swapped under it");
   env.w.__onMessage({ type: "rme:report" }, {}, r => (resp = r));
-  assert.strictEqual(JSON.stringify(resp.editors), '[{"selector":".monaco-editor","count":1,"sample":"div.monaco-editor","enabled":true}]', "report names the editor element");
+  assert.strictEqual(JSON.stringify(resp.editors), '[{"sample":"div.monaco-editor","count":1}]', "report names the editor element");
+  assert.strictEqual(resp.protect, true);
   assert.strictEqual(JSON.stringify(resp.deferred), '["Editor Only Mono"]');
-
   assert.strictEqual(JSON.stringify(env.w.__sent), '[{"type":"rme:learn","names":["Editor Only Mono"]}]', "late editor font is reported for learning");
 
   // the learned font lands in the settings while this page is still open: it must NOT be swapped under the editor now
@@ -190,8 +193,22 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   await wait(300);
   assert.ok(!env.sheets()[0].includes('"Editor Only Mono"') && !env.sheets()[1].includes('"Editor Only Mono"'), "learned font waits for the next page load");
 
+  // an editor with NO known class that mounts after load: its hidden input announces it
+  env = setup({ settings: undefined, bf: BF, editor: true });
+  await wait(400);
+  const mount = env.w.document.createElement("div");
+  mount.innerHTML = '<div class="a"><div class="b"><div class="lines" style="font-family: \'Brand New Mono\', monospace">x</div><textarea autocorrect="off" spellcheck="false"></textarea></div></div>';
+  env.w.document.body.appendChild(mount);
+  const ta = mount.querySelector("textarea");
+  const seen = new env.w.Event("animationstart", { bubbles: true });
+  seen.animationName = "rme-seen";
+  ta.dispatchEvent(seen);
+  await wait(100);
+  assert.ok(env.w.__sent.some(m => m.names.includes("Brand New Mono")), "unknown editor found through its hidden input, font learned");
+  assert.ok(!env.sheets()[1].includes('"Brand New Mono"'), "and not swapped under it");
+
   // text boxes are not forced unless the user opts in
-  env = setup({ settings: { version: 3, mono: { textarea: true } }, bf: BF });
+  env = setup({ settings: { version: 4, mono: { textarea: true } }, bf: BF });
   await wait(300);
   assert.ok(env.sheets()[0].includes("code *,textarea{"), "textarea forcing is opt-in");
 
@@ -200,17 +217,15 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   await wait(500);
   assert.ok(env.sheets()[0].includes('font-family:"Editor Only Mono"'), "manual mono font applied from the first paint");
 
-  // one editor switched off from the popup: it is no longer scoped away, the others still are
-  env = setup({ settings: { version: 3, editors: { off: [".monaco-editor"] } }, bf: BF, editor: true });
+  // protection switched off for this site, and globally
+  env = setup({ settings: { version: 4, editors: { offSites: ["site.test"] } }, bf: BF, editor: true });
   await wait(400);
-  assert.ok(!env.sheets()[0].includes("monaco-editor") && env.sheets()[0].includes("@scope"), "per-editor switch");
+  assert.ok(!env.sheets()[0].includes("@scope") && !env.sheets()[0].includes("rme-seen"), "site switch turns protection off");
   env.w.__onMessage({ type: "rme:report" }, {}, r => (resp = r));
-  assert.strictEqual(resp.editors[0].enabled, false);
-
-  // seed switched off, protection switched off
-  env = setup({ settings: { mono: { seed: false }, editors: { protect: false } }, bf: BF, editor: true });
+  assert.strictEqual(resp.siteOff, true);
+  env = setup({ settings: { version: 4, editors: { protect: false } }, bf: BF, editor: true });
   await wait(400);
-  assert.ok(!env.sheets()[0].includes('"JetBrains Mono"') && !env.sheets()[0].includes("@scope"), "settings switch both features off");
+  assert.ok(!env.sheets()[0].includes("@scope"), "global switch turns protection off");
 
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

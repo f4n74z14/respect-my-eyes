@@ -5,53 +5,20 @@
 <meta name="color-scheme" content="light dark">
 <title>Respect My Eyes - Settings</title>
 <link rel="stylesheet" href="ui.css">
-<style>
-    .topbar { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
-    .topbar-in { max-width: 760px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; gap: 18px; height: 52px; }
-    .brand { display: flex; align-items: center; gap: 9px; font-size: 15px; white-space: nowrap; }
-    .brand img { width: 22px; height: 22px; border-radius: 5px; }
-    #nav { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; flex: 1; }
-    #nav a { color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 7px; white-space: nowrap; transition: color .15s, background-color .15s; }
-    #nav a:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
-    #nav a.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); font-weight: 600; }
-    #saved { font-size: 12px; color: var(--muted); opacity: 0; transition: opacity .3s; white-space: nowrap; }
-    #saved.show { opacity: 1; }
-    #saved::before { content: "\2713\00a0"; color: var(--ok); }
-
-    main { max-width: 760px; margin: 0 auto; padding: 24px 20px 120px; }
-    section { margin: 0 0 30px; scroll-margin-top: 66px; }
-    h1 { margin-bottom: 6px; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px 18px; }
-    .card.pad { padding: 16px 18px; }
-    .lead { margin: 12px 0 2px; color: var(--muted); font-size: 12px; }
-
-    #status { display: flex; align-items: center; padding: 12px 0 8px; font-size: 12px; color: var(--muted); }
-    .font-row { display: grid; grid-template-columns: 90px 280px 1fr; gap: 10px; align-items: center; padding: 6px 0; }
-    .font-row .label { font-weight: 550; }
-    .preview { margin: 8px 0 4px; padding: 10px 12px; border-radius: 8px; background: var(--field); border: 1px solid var(--line); display: grid; gap: 5px; }
-    .preview .sample { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: font-family .2s; }
-    .preview .tag { display: inline-block; width: 80px; font: 11px system-ui, sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
-
-    .toolbar { display: flex; align-items: center; gap: 12px; margin: 14px 0 10px; }
-    .toolbar .grow { flex: 1; min-width: 0; }
-    .toolbar input[type=search] { max-width: 220px; }
-    .toolbar #count { white-space: nowrap; }
-    #addForm { display: flex; gap: 10px; margin-top: 12px; }
-    #addForm input { flex: 1; }
-</style>
+<link rel="stylesheet" href="options.css">
 </head>
 <body>
 <div class="topbar"><div class="topbar-in">
     <div class="brand"><img src="icon-32.png" alt=""><strong>Respect My Eyes</strong></div>
     <nav id="nav" aria-label="Sections">
-        <a href="#general">General</a><a href="#fonts">Fonts</a><a href="#monospace">Monospace</a><a href="#editors">Editors</a><a href="#extra">Extra fonts</a><a href="#icons">Icons</a><a href="#backup">Backup</a>
+        <a href="#general">General</a><a href="#fonts">Fonts</a><a href="#monospace">Monospace</a><a href="#extra">Extra fonts</a><a href="#backup">Backup</a>
     </nav>
     <span id="saved" role="status" aria-live="polite">Saved</span>
 </div></div>
 
 <main>
     <h1>Settings</h1>
-    <p class="muted" style="margin-bottom:24px">Changes are saved automatically and applied to open tabs. If a page does not change, reload it.</p>
+    <p class="muted intro">Changes are saved automatically and applied to open tabs. If a page does not change, reload it.</p>
 
     <section id="general">
         <h2>General</h2>
@@ -77,7 +44,7 @@
             <div class="preview" id="preview" aria-label="Preview"></div>
             <div class="card-footer">
                 <span class="hint">Your browser's own font settings live on a separate page.</span>
-                <div style="display:flex;gap:10px">
+                <div class="cluster">
                     <button id="refreshBf">Re-read</button>
                     <button id="openBrowserFonts">Open browser settings</button>
                 </div>
@@ -92,56 +59,38 @@
                 <div class="text"><div class="title">Font size</div><div class="hint">Applied to code blocks. Editors are left alone.</div></div>
                 <div class="controls">
                     <div class="seg" id="sizeSeg" role="radiogroup" aria-label="Font size source"></div>
-                    <span><input type="number" id="customSize" min="6" max="72" step="0.5" aria-label="Custom size in pixels"> px</span>
+                    <span class="reveal" id="sizeNum"><input type="number" id="customSize" min="6" max="72" step="0.5" aria-label="Custom size in pixels"> px</span>
                 </div>
             </div>
             <div class="setting">
                 <div class="text"><div class="title">Scaling</div><div class="hint">Shrinks named monospace fonts (Consolas, Menlo...) to match the browser's own monospace size.</div></div>
                 <div class="controls">
                     <div class="seg" id="scaleSeg" role="radiogroup" aria-label="Scaling"></div>
-                    <span><input type="number" id="customScale" min="25" max="200" step="0.25" aria-label="Custom scale in percent"> %</span>
+                    <span class="reveal" id="scaleNum"><input type="number" id="customScale" min="25" max="200" step="0.25" aria-label="Custom scale in percent"> %</span>
                 </div>
             </div>
             <div class="setting">
                 <div class="text"><div class="title">Text boxes</div><div class="hint">Use the monospace font in &lt;textarea&gt;. Can misplace the cursor on sites that mirror their text boxes.</div></div>
                 <label class="switch"><input type="checkbox" id="textarea" aria-label="Monospace in text boxes"><span></span></label>
             </div>
-        </div>
-    </section>
-
-    <section id="editors">
-        <h2>Code editors</h2>
-        <div class="card">
-            <p class="lead">Editors measure a character's width to place the cursor. Changing their font behind their back makes it drift.</p>
             <div class="setting">
-                <div class="text"><div class="title">Protect editors</div><div class="hint">No forced size or spacing inside them, and a font they already use is not swapped.</div></div>
-                <label class="switch"><input type="checkbox" id="edProtect" aria-label="Protect editors"><span></span></label>
+                <div class="text"><div class="title">Code editors</div><div class="hint">Found automatically. Their font size and spacing are never forced, and the font they already use is not swapped under them.</div></div>
+                <label class="switch"><input type="checkbox" id="edProtect" aria-label="Protect code editors"><span></span></label>
             </div>
-            <div class="setting">
-                <div class="text"><div class="title">Learn fonts</div><div class="hint">Remember a monospace font an editor reveals late and apply it from the first paint after a reload.</div></div>
-                <label class="switch"><input type="checkbox" id="autoLearn" aria-label="Learn fonts"><span></span></label>
-            </div>
-            <div class="setting stack">
-                <div class="title">Editor selectors</div>
-                <div class="hint">CSS selectors of editor containers, one per line. Add the root of any editor that still misbehaves. Individual ones can also be switched off from the toolbar popup.</div>
-                <textarea id="edSelectors" rows="4" spellcheck="false" aria-label="Editor selectors"></textarea>
+            <details class="setting stack adv">
+                <summary>Advanced</summary>
+                <div class="title">Extra editor selectors</div>
+                <div class="hint">CSS selectors, one per line, for an editor that is not detected on its own.</div>
+                <textarea id="edSelectors" rows="3" spellcheck="false" aria-label="Extra editor selectors"></textarea>
                 <div class="hint warn" id="selHint" role="alert"></div>
-            </div>
-            <div class="setting stack">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:18px">
-                    <div class="text"><div class="title">Apply at page start</div><div class="hint">Replace these names before page scripts run, so editors measure your font from the start. Monospace fonts in Extra fonts are always included.</div></div>
-                    <label class="switch"><input type="checkbox" id="seed" aria-label="Apply at page start"><span></span></label>
-                </div>
-                <textarea id="seedNames" rows="4" spellcheck="false" aria-label="Names to apply at page start"></textarea>
-            </div>
-            <div class="card-footer"><span class="hint">Back to the built-in list of well-known monospace fonts.</span><button id="seedReset" class="ghost">Restore defaults</button></div>
+            </details>
         </div>
     </section>
 
     <section id="extra">
         <h2>Extra fonts</h2>
         <div class="card pad">
-            <p class="hint" style="margin:0">For fonts that cannot be detected automatically, such as a font stack without a generic fallback. Use the name exactly as the site does.</p>
+            <p class="hint flush">For fonts that cannot be detected automatically, such as a font stack without a generic fallback. Use the name exactly as the site does.</p>
             <div class="toolbar">
                 <input type="search" id="filter" class="grow" placeholder="Filter" aria-label="Filter fonts" hidden>
                 <span id="count" class="hint grow"></span>
@@ -153,18 +102,12 @@
                 <select id="newCat" aria-label="Category"></select>
                 <button class="primary" type="submit">Add</button>
             </form>
-            <div class="card-footer"><span class="hint">Back to the built-in list of fonts.</span><button id="resetManual" class="ghost danger">Restore defaults</button></div>
-        </div>
-    </section>
-
-    <section id="icons">
-        <h2>Icon fonts</h2>
-        <div class="card">
-            <div class="setting stack">
-                <div class="title">Protected keywords</div>
+            <details class="adv spaced">
+                <summary>Icon font keywords</summary>
                 <div class="hint">A font whose name contains one of these words is never replaced. Built in: icon, awesome, glyph, symbol, emoji and more. One per line.</div>
-                <textarea id="iconPatterns" rows="3" spellcheck="false" aria-label="Protected keywords"></textarea>
-            </div>
+                <textarea id="iconPatterns" rows="3" spellcheck="false" aria-label="Icon font keywords"></textarea>
+            </details>
+            <div class="card-footer"><span class="hint">Back to the built-in list of fonts.</span><button id="resetManual" class="ghost danger">Restore defaults</button></div>
         </div>
     </section>
 
@@ -188,15 +131,15 @@
     <form method="dialog" id="impForm">
         <div class="dlg-head">
             <h3 id="impTitle">Import fonts</h3>
-            <p class="hint" style="margin:0">One font per line. Add a category after <code>|</code>: sans, serif, mono or ignore. Lines without one use the default below.</p>
+            <p class="hint flush">One font per line. Add a category after <code>|</code>: sans, serif, mono or ignore. Lines without one use the default below.</p>
         </div>
         <div class="dlg-body">
             <textarea id="impText" rows="6" spellcheck="false" placeholder="Gotham | sans&#10;Fira Code | mono&#10;Wingdings | ignore&#10;Some Font" aria-label="Fonts to import"></textarea>
-            <div style="display:flex;align-items:center;gap:10px;margin:12px 0 8px">
-                <span class="hint" style="margin:0">Default category</span>
+            <div class="cluster dlg-cat">
+                <span class="hint flush">Default category</span>
                 <div class="seg" id="impCatSeg" role="radiogroup" aria-label="Default category"></div>
             </div>
-            <div class="list" id="impPreview" style="max-height:190px"></div>
+            <div class="list" id="impPreview"></div>
         </div>
         <div class="dlg-foot">
             <span class="grow" id="impSummary"></span>
@@ -208,6 +151,7 @@
 
 <div id="toasts"></div>
 <script src="common.js"></script>
+<script src="ui.js"></script>
 <script src="options.js"></script>
 </body>
 </html>

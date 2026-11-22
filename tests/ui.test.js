@@ -8,19 +8,20 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 const BF = { available: true, standard: "Times New Roman", serif: "Georgia", sansserif: "Verdana", fixed: "Consolas", fixedSize: 13, defaultSize: 16 };
 
 async function page(file, { report, url = "https://site.test/" } = {}) {
-  const html = fs.readFileSync(path.join(dist, file), "utf8").replace(/<script src="[^"]+"><\/script>/g, "");
-  const w = new JSDOM(html, { runScripts: "outside-only", url: "chrome-extension://x/" + file }).window;
+  const read = f => fs.readFileSync(path.join(dist, f), "utf8");
+  const html = read(file);
+  const w = new JSDOM(html.replace(/<script src="[^"]+"><\/script>/g, ""), { runScripts: "outside-only", url: "chrome-extension://x/" + file }).window;
   w.self = w;
   w.Element.prototype.scrollIntoView = function () {};   // missing in jsdom
   const store = { rmeBrowserFonts: BF };
   const created = [];
   w.chrome = {
-    storage: { local: { get: (k, cb) => { const r = { ...store }; return cb ? cb(r) : Promise.resolve(r); }, set: (o, cb) => { Object.assign(store, o); cb && cb(); return Promise.resolve(); } }, onChanged: { addListener() {} } },
-    runtime: { sendMessage: (m, cb) => cb && cb(BF), getURL: p => "chrome-extension://x/" + p, openOptionsPage() {} },
+    storage: { local: { get: () => Promise.resolve({ ...store }), set: (o, cb) => { Object.assign(store, o); cb && cb(); return Promise.resolve(); } }, onChanged: { addListener() {} } },
+    runtime: { sendMessage: async () => BF, getURL: p => "chrome-extension://x/" + p, openOptionsPage() {} },
     tabs: { query: async () => [{ id: 1, url }], sendMessage: async () => report, create: o => created.push(o.url), reload() {} }
   };
-  w.eval(fs.readFileSync(path.join(dist, "common.js"), "utf8"));
-  w.eval(fs.readFileSync(path.join(dist, file.replace(".html", ".js")), "utf8"));
+  // load the scripts in the order the page lists them, like the browser does
+  for (const [, src] of html.matchAll(/<script src="([^"]+)"><\/script>/g)) w.eval(read(src));
   await wait(150);
   return { w, d: w.document, store, created, $: id => w.document.getElementById(id), ev: (n, t) => t.dispatchEvent(new w.Event(n, { bubbles: true, cancelable: true })) };
 }
@@ -28,11 +29,13 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
 
 (async () => {
   // ---------------------------------------------------------------- options
-  let o = await page("options.html");
+  const o = await page("options.html");
   assert.strictEqual(o.d.querySelectorAll("#fontRows .font-row").length, 3);
   assert.strictEqual(o.d.querySelectorAll("#preview .sample").length, 3, "live preview");
   assert.ok(o.$("preview").firstChild.style.fontFamily.includes("Verdana"), "preview uses the browser font");
-  assert.strictEqual(o.d.querySelectorAll("#nav a").length, 7);
+  assert.strictEqual(o.d.querySelectorAll("#nav a").length, 5, "fewer sections");
+  assert.ok(!o.d.getElementById("seed") && !o.d.getElementById("autoLearn") && !o.d.getElementById("seedNames"), "internal knobs are gone");
+  assert.ok(!o.$("sizeNum").classList.contains("show") && !o.$("scaleNum").classList.contains("show"), "custom numbers are hidden until Custom");
   assert.strictEqual(o.d.querySelectorAll("#manualList .list-row").length, 20);
   assert.strictEqual(o.$("count").textContent, "20 fonts");
   assert.strictEqual(o.$("filter").hidden, false, "filter appears for long lists");
@@ -88,19 +91,22 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   // segmented controls, switches, selector validation
   o.$("sizeSeg").children[1].click(); await wait(300);
   assert.strictEqual(o.store.rmeSettings.mono.sizeMode, "custom");
-  assert.strictEqual(o.$("customSize").disabled, false);
+  assert.ok(o.$("sizeNum").classList.contains("show"), "custom size slides in");
   o.$("textarea").checked = true; o.ev("change", o.$("textarea")); await wait(300);
   assert.strictEqual(o.store.rmeSettings.mono.textarea, true);
-  o.$("seedReset").click(); await wait(50);
+  o.$("edProtect").checked = false; o.ev("change", o.$("edProtect")); await wait(300);
+  assert.strictEqual(o.store.rmeSettings.editors.protect, false);
+  o.$("edSelectors").value = ".my-editor\n:::bad"; o.ev("input", o.$("edSelectors")); await wait(300);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(o.store.rmeSettings.editors.selectors)), [".my-editor", ":::bad"]);
   o.$("resetAll").click(); await wait(50);
   assert.strictEqual(o.store.rmeSettings.mono.textarea, false, "reset everything");
   [...o.$("toasts").querySelectorAll("button")].pop().click(); await wait(50);
   assert.strictEqual(o.store.rmeSettings.mono.sizeMode, "custom", "reset can be undone");
 
   // ---------------------------------------------------------------- popup
-  const report = { host: "site.test", active: true, reason: "", protect: true, learned: true, deferred: ["Late Mono"],
+  const report = { host: "site.test", active: true, reason: "", protect: true, siteOff: false, deferred: ["Late Mono"],
     unknown: [{ name: "Gotham", count: 12 }, { name: "Whitney X", count: 1 }],
-    editors: [{ selector: ".monaco-editor", count: 1, sample: "div#editor.monaco-editor.vs-dark", enabled: true }, { selector: "[contenteditable]", count: 3, sample: "div.ProseMirror", enabled: true }] };
+    editors: [{ sample: "div#editor.monaco-editor.vs-dark", count: 1 }, { sample: "div.cm-editor", count: 3 }] };
   let p = await page("popup.html", { report });
   assert.strictEqual(p.d.querySelectorAll("#fonts .font-item").length, 3);
   assert.strictEqual(p.$("host").textContent, "site.test");
@@ -109,12 +115,15 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.strictEqual(p.d.querySelectorAll("#editors .ed").length, 3, "2 editors + 1 late font");
   assert.ok(p.$("editors").textContent.includes("div#editor.monaco-editor.vs-dark"), "the element is named");
   assert.ok(p.$("editors").textContent.includes("\u00d73"), "with a count");
-  assert.strictEqual(p.$("banner").hidden, false, "remembered editor font asks for a reload");
+  assert.ok(p.$("editors").textContent.includes("Remembered"), "late editor font is remembered automatically");
+  assert.strictEqual(p.$("banner").hidden, false, "which needs a reload");
+  assert.strictEqual(p.$("edSwitch").checked, true);
 
-  // quick switch for one editor
-  const sw = p.$("editors").querySelector(".ed input");
-  sw.checked = false; p.ev("change", sw); await wait(50);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(p.store.rmeSettings.editors.off)), [".monaco-editor"]);
+  // one switch for the whole site
+  p.$("edSwitch").checked = false; p.ev("change", p.$("edSwitch")); await wait(50);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p.store.rmeSettings.editors.offSites)), ["site.test"]);
+  p.$("edSwitch").checked = true; p.ev("change", p.$("edSwitch")); await wait(50);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p.store.rmeSettings.editors.offSites)), []);
 
   // classify an unknown font: choose Mono, Add
   const card = p.$("unknown").children[0];
@@ -138,10 +147,24 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
 
   // a normal page that was open before the extension started: say so and offer a reload
   p = await page("popup.html", { report: undefined });
-  assert.ok(/not running/.test(p.$("note").textContent) && p.$("banner").hidden === false && p.$("site").hidden === false);
+  assert.ok(/not running/.test(p.$("note").textContent) && p.$("banner").hidden === false);
+  assert.ok(p.$("site").hidden, "no site switch where the extension is not running");
+
+  // web stores: http(s), but extensions cannot run there
+  p = await page("popup.html", { report: undefined, url: "https://chromewebstore.google.com/detail/x" });
+  assert.ok(p.$("site").hidden && p.$("banner").hidden && /can't be changed/.test(p.$("note").textContent), "web store is treated like a browser page");
+
+  // globally disabled: nothing to switch per site; an excluded site keeps the switch so it can be re-enabled
+  p = await page("popup.html", { report: { host: "x.test", active: false, reason: "disabled", unknown: [], deferred: [], editors: [] } });
+  assert.ok(p.$("site").hidden, "hidden while the extension is off");
+  p = await page("popup.html", { report: { host: "x.test", active: false, reason: "excluded", unknown: [], deferred: [], editors: [] } });
+  assert.strictEqual(p.$("site").hidden, false, "shown on an excluded site");
+
+  // the hidden attribute must really hide: a display rule on the element used to beat the browser's default
+  assert.ok(/\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(fs.readFileSync(path.join(dist, "ui.css"), "utf8")), "[hidden] always wins");
 
   // nothing to show: no empty sections
-  p = await page("popup.html", { report: { host: "x.test", active: true, protect: true, learned: true, deferred: [], unknown: [], editors: [] } });
+  p = await page("popup.html", { report: { host: "x.test", active: true, protect: true, siteOff: false, deferred: [], unknown: [], editors: [] } });
   assert.ok(p.$("attention").hidden && p.$("editorsBox").hidden, "empty sections stay hidden");
 
   console.log("ui.test.js: all checks passed");

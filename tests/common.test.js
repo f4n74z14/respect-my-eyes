@@ -92,20 +92,29 @@ t("settings normalisation", () => {
 
 t("editor settings are validated", () => {
     const d = F.normalizeSettings(null);
-    assert.strictEqual(d.editors.protect, true);
-    assert.ok(d.editors.selectors.includes(".monaco-editor") && d.mono.seed === true);
-    const e = F.normalizeSettings({ version: 3, editors: { protect: false, selectors: [" .my-editor ", "a{color:red}", ".x;y", "@import", ".my-editor", ""] } });
+    assert.deepStrictEqual([d.editors.protect, d.editors.selectors, d.editors.offSites], [true, [], []]);
+    const e = F.normalizeSettings({ version: 4, editors: { protect: false, selectors: [" .my-editor ", "a{color:red}", ".x;y", "@import", ".my-editor", ""], offSites: ["https://A.com/x", "a.com"] } });
     assert.strictEqual(e.editors.protect, false);
     assert.deepStrictEqual(e.editors.selectors, [".my-editor"]);
+    assert.deepStrictEqual(e.editors.offSites, ["a.com"]);
+    // v3 stored the built-in roots as well: only the user's own additions survive
+    const v3 = F.normalizeSettings({ version: 3, editors: { selectors: [".monaco-editor", ".xterm", "[contenteditable]", ".mine"] } });
+    assert.deepStrictEqual(v3.editors.selectors, [".mine"]);
+});
+
+t("editor boundary is automatic", () => {
+    const b = F.editorBoundary([".mine"]);
+    assert.ok(b.startsWith(':is(textarea,[contenteditable],[role="textbox"])[autocorrect="off"][spellcheck="false"],:has(> '), "hidden input + 2 ancestors");
+    assert.ok(b.includes(":has(> * > :is(") && !b.includes(":has(> * > * >"));
+    assert.ok(b.includes(".monaco-editor,.cm-editor,.CodeMirror,.ace_editor,.xterm,.mine"), "known roots + user additions");
 });
 
 t("old settings are migrated", () => {
     const m = F.normalizeSettings({ version: 2, mono: { textarea: true, sizeMode: "custom", customSize: 15 }, editors: { selectors: [".monaco-editor"] } });
     assert.strictEqual(m.mono.textarea, false, "textarea forcing was the old default and must not survive");
     assert.strictEqual(m.mono.customSize, 15, "other values are kept");
-    assert.ok(m.editors.selectors.includes(".monaco-editor") && m.editors.selectors.includes("[contenteditable]"));
     assert.strictEqual(F.normalizeSettings({ version: 3, mono: { textarea: true } }).mono.textarea, true, "explicit opt-in is respected");
-    assert.deepStrictEqual(F.normalizeSettings({ mono: { seedNames: [" Foo ", "foo", 'B"ar', ""] } }).mono.seedNames, ["Foo", "Bar"]);
+    assert.deepStrictEqual(F.cleanNameList([" Foo ", "foo", 'B"ar', ""]), ["Foo", "Bar"]);
     assert.strictEqual(F.DEFAULT_SETTINGS.mono.textarea, false);
 });
 
@@ -117,8 +126,7 @@ t("parses pasted font lists", () => {
         { name: "Gotham", category: "serif" },           // default category
         { name: "Wingdings", category: "ignore" }]);
     assert.deepStrictEqual(r.invalid.map(x => [x.line, x.reason]), [[6, 'Unknown category "wat"'], [7, "Empty name"]]);
-    assert.deepStrictEqual(F.normalizeSettings({ version: 3, editors: { off: [".a", "x{", ".a"] } }).editors.off, [".a"]);
-});
+    });
 
 t("exclusion matching", () => {
     assert.ok(F.isExcluded("www.example.com", ["example.com"]));

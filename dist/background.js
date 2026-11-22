@@ -2,95 +2,78 @@
  * Respect My Eyes - service worker
  *
  * chrome.fontSettings is not available to content scripts, so this worker reads the fonts configured in
- * chrome://settings/fonts once and caches them in chrome.storage.local. Every content script then reads the cache
- * instead of anything being configured per site. The cache is refreshed whenever the browser setting changes.
+ * chrome://settings/fonts and caches them in chrome.storage.local. Content scripts read the cache, so nothing is
+ * configured per site, and the cache is refreshed whenever the browser setting changes.
  */
 importScripts("common.js");
 
-const F = self.RME;
+const { RME: F } = self;
+const FONT_KEYS = ["available", "standard", "serif", "sansserif", "fixed", "fixedSize", "defaultSize"];
+
+const attempt = async (call, pick, fallback) => {
+    try { return pick(await call()) || fallback; } catch { return fallback; }
+};
 
 async function readBrowserFonts() {
-    const result = { available: false, standard: "", serif: "", sansserif: "", fixed: "", fixedSize: 0, defaultSize: 0, updated: Date.now() };
+    const fonts = { available: false, standard: "", serif: "", sansserif: "", fixed: "", fixedSize: 0, defaultSize: 0 };
+    const api = chrome.fontSettings;
 
-    if (!chrome.fontSettings) return result;
+    if (!api) return fonts;
 
-    const font = async function (genericFamily) {
-        try {
-            const r = await chrome.fontSettings.getFont({ genericFamily: genericFamily });
-            return (r && r.fontId) || "";
-        }
-        catch (e) { return ""; }
-    };
-    const size = async function (fn) {
-        try {
-            const r = await fn();
-            return (r && r.pixelSize) || 0;
-        }
-        catch (e) { return 0; }
-    };
+    const font = genericFamily => attempt(() => api.getFont({ genericFamily }), r => r.fontId, "");
+    const size = call => attempt(call, r => r.pixelSize, 0);
 
-    const all = await Promise.all([
+    [fonts.standard, fonts.serif, fonts.sansserif, fonts.fixed, fonts.fixedSize, fonts.defaultSize] = await Promise.all([
         font("standard"), font("serif"), font("sansserif"), font("fixed"),
-        size(function () { return chrome.fontSettings.getDefaultFixedFontSize(); }),
-        size(function () { return chrome.fontSettings.getDefaultFontSize(); })
+        size(() => api.getDefaultFixedFontSize()), size(() => api.getDefaultFontSize())
     ]);
+    fonts.available = !!(fonts.serif || fonts.sansserif || fonts.fixed);
 
-    result.standard = all[0];
-    result.serif = all[1];
-    result.sansserif = all[2];
-    result.fixed = all[3];
-    result.fixedSize = all[4];
-    result.defaultSize = all[5];
-    result.available = !!(result.serif || result.sansserif || result.fixed);
-
-    return result;
+    return fonts;
 }
-
-let refreshTimer = null;
 
 async function refresh() {
-    const bf = await readBrowserFonts();
-    const old = (await chrome.storage.local.get(F.KEYS.fonts))[F.KEYS.fonts];
+    const fonts = await readBrowserFonts();
+    const cached = (await chrome.storage.local.get(F.KEYS.fonts))[F.KEYS.fonts];
 
-    // Avoid waking every tab's content script when nothing changed
-    if (old && ["available", "standard", "serif", "sansserif", "fixed", "fixedSize", "defaultSize"].every(function (k) { return old[k] === bf[k]; })) {
-        return old;
-    }
-    await chrome.storage.local.set({ [F.KEYS.fonts]: bf });
-    return bf;
+    // Writing identical values would wake every tab's content script for nothing
+    if (cached && FONT_KEYS.every(k => cached[k] === fonts[k])) return cached;
+
+    await chrome.storage.local.set({ [F.KEYS.fonts]: fonts });
+    return fonts;
 }
 
-function refreshSoon() {
+let refreshTimer;
+const refreshSoon = () => {
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(refresh, 200);
-}
+};
 
-// v1 stored "settings" / "browserFonts"; move them to the prefixed keys once
+// v1 stored "settings" and "browserFonts"; move them to the prefixed keys once
 async function migrate() {
-    const all = await chrome.storage.local.get([F.KEYS.settings, F.KEYS.fonts].concat(F.KEYS.legacy));
+    const all = await chrome.storage.local.get([F.KEYS.settings, F.KEYS.fonts, ...F.KEYS.legacy]);
+    const [oldSettings, oldFonts] = F.KEYS.legacy.map(k => all[k]);
     const move = {};
 
-    if (all.settings && !all[F.KEYS.settings]) move[F.KEYS.settings] = all.settings;
-    if (all.browserFonts && !all[F.KEYS.fonts]) move[F.KEYS.fonts] = all.browserFonts;
+    if (oldSettings && !all[F.KEYS.settings]) move[F.KEYS.settings] = oldSettings;
+    if (oldFonts && !all[F.KEYS.fonts]) move[F.KEYS.fonts] = oldFonts;
 
     if (Object.keys(move).length) await chrome.storage.local.set(move);
     await chrome.storage.local.remove(F.KEYS.legacy);
 }
 
-chrome.runtime.onInstalled.addListener(async function () {
+chrome.runtime.onInstalled.addListener(async () => {
     await migrate();
-
-    const data = await chrome.storage.local.get(F.KEYS.settings);
-    await chrome.storage.local.set({ [F.KEYS.settings]: F.normalizeSettings(data[F.KEYS.settings]) });
+    await F.storage.save((await F.storage.load()).settings);       // writes defaults and upgrades old settings
     await refresh();
 });
 
-chrome.runtime.onStartup.addListener(function () { migrate().then(refresh); });
+chrome.runtime.onStartup.addListener(() => migrate().then(refresh));
 
 if (chrome.fontSettings) {
-    ["onFontChanged", "onDefaultFontSizeChanged", "onDefaultFixedFontSizeChanged"].forEach(function (name) {
-        if (chrome.fontSettings[name]) chrome.fontSettings[name].addListener(refreshSoon);
-    });
+    for (const event of ["onFontChanged", "onDefaultFontSizeChanged", "onDefaultFixedFontSizeChanged"]) {
+        if (chrome.fontSettings[event]) chrome.fontSettings[event].addListener(refreshSoon);
+    }
 }
 
 // Editors reveal monospace fonts late; remember them so the next load applies them from the first paint.
@@ -98,38 +81,27 @@ if (chrome.fontSettings) {
 let learnChain = Promise.resolve();
 
 function learn(names) {
-    learnChain = learnChain.then(async function () {
-        const data = await chrome.storage.local.get(F.KEYS.settings);
-        const s = F.normalizeSettings(data[F.KEYS.settings]);
+    learnChain = learnChain.then(async () => {
+        const { settings } = await F.storage.load();
+        const known = new Set(settings.manualFonts.map(f => F.norm(f.name)));
+        const fresh = F.cleanNameList(names.slice(0, 20)).filter(n => !known.has(F.norm(n)));
 
-        if (!s.editors.autoLearn) return;
+        if (!fresh.length) return;
 
-        const have = new Set(s.manualFonts.map(function (f) { return F.norm(f.name); }));
-        let changed = false;
-
-        names.slice(0, 20).forEach(function (n) {
-            n = String(n).slice(0, 120);
-            const k = F.norm(n);
-            if (k && !have.has(k)) { s.manualFonts.push({ name: n, category: "mono" }); have.add(k); changed = true; }
-        });
-
-        if (changed) {
-            s.manualFonts = F.cleanManual(s.manualFonts);
-            await chrome.storage.local.set({ [F.KEYS.settings]: s });
-        }
-    }).catch(function () { /* keep the chain alive */ });
+        settings.manualFonts = F.cleanManual([...settings.manualFonts, ...fresh.map(name => ({ name, category: "mono" }))]);
+        await F.storage.save(settings);
+    }).catch(() => { /* keep the chain alive */ });
 
     return learnChain;
 }
 
-chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     if (msg && msg.type === "rme:learn" && Array.isArray(msg.names)) {
-        learn(msg.names).then(function () { sendResponse(true); });
+        learn(msg.names).then(() => reply(true));
         return true;
     }
-
     if (msg && msg.type === "rme:refresh") {
-        refresh().then(sendResponse, function () { sendResponse(null); });
+        refresh().then(reply, () => reply(null));
         return true;
     }
 });

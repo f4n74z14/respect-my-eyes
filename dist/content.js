@@ -1,16 +1,15 @@
 /*
  * Respect My Eyes - content script
  *
- * Forces the fonts configured in the browser (chrome://settings/fonts) onto every page, without breaking icon fonts.
+ * Forces the fonts configured in the browser (chrome://settings/fonts) onto every page without breaking icon fonts.
  *
- *   Phase 1 (document_start)  manual font overrides + monospace defaults, so the first paint is already right.
- *   Phase 2 (DOM ready, load, stylesheets added later)
- *                             walk the stylesheets once (incrementally), classify every font-family found, override
- *                             the names via @font-face local() and the selectors via !important rules.
+ *   base sheet  (document_start)   manual fonts + monospace defaults, so the first paint is already right
+ *   site sheet  (DOM ready, load,  built from what the page uses: stylesheets, computed styles, document.fonts.
+ *                new stylesheets)  Names are overridden with @font-face local(), selectors with !important rules.
  *
- * All generated CSS lives in two constructed stylesheets, so it is exempt from page CSP and can be replaced cheaply.
+ * Both sheets are constructed stylesheets: exempt from the page's CSP and cheap to replace.
  */
-(function () {
+(() => {
     "use strict";
 
     const F = self.RME;
@@ -18,268 +17,249 @@
     if (!F || window.__rmeLoaded) return;
     window.__rmeLoaded = true;
 
-    const CATS = F.CATS;
-    const K = F.KEYS;
+    const { CATS, norm } = F;
+    const isCat = cat => CATS.includes(cat);
 
-    // Monospace fonts an editor was already using when we found them. They stay untouched for the rest of this page's
-    // life (even if settings change), because the editor measured the old font. Survives configure().
+    const VAR_SCOPE = /^(:root|html|body)\b/i;
+    const CHUNK = 250;              // elements sampled per tick
+    const SAMPLE_LIMIT = 6000;
+    const REPORT_LIMIT = 8000;
+    const RULE_TYPES = { CSSStyleRule: 1, CSSImportRule: 3, CSSFontFaceRule: 5, CSSKeyframesRule: 7 };   // legacy fallback
+
+    // Our site and its top-level site, so an excluded site also excludes its iframes
+    const HOSTS = (() => {
+        const top = location.ancestorOrigins && location.ancestorOrigins.length
+            ? [location.ancestorOrigins[location.ancestorOrigins.length - 1]] : [];
+        return [location.hostname, ...top.map(o => { try { return new URL(o).hostname; } catch { return ""; } })];
+    })();
+    const matchesHosts = list => HOSTS.some(h => F.isExcluded(h, list));
+
+    // Monospace fonts an editor was already using when found: they stay untouched for the rest of this page's life,
+    // because the editor measured the old font. Survives configure().
     const lateNames = new Map();
     const learnQueue = new Set();
 
-    let cfg = null;                 // resolved configuration, null while disabled / excluded
+    let cfg = null;                 // resolved configuration, null while disabled or excluded
     let offReason = "disabled";
 
-    let analysisCache, processed, unreadable, acc, bodyCat, lastSiteCss, baseCss;
+    const freshState = () => ({
+        analysis: new Map(),        // font-family value -> analysis
+        faceCss: new Map(),         // name|category -> generated @font-face rules
+        processed: new WeakMap(),   // sheet -> number of rules already scanned
+        unreadable: new WeakSet(),  // cross-origin sheets
+        faces: new Map(),           // lower-case family -> { name, cat } to override
+        pageFaces: new Map(),       // faces the page declared with non-standard descriptors
+        faceKeys: new Set(),
+        faceRules: [],              // page @font-face rules that may have to be removed
+        sel: { sans: new Set(), serif: new Set(), mono: new Set() },
+        vars: [],                   // custom property overrides
+        sampled: new Set(),
+        sampledOnce: false,
+        fontCount: -1,
+        bodyCat: null,
+        lastCss: null
+    });
+    let st = freshState();
 
     // ---------------------------------------------------------------------------------------------------------------
-    // Output: two constructed stylesheets (with a <style> fallback)
+    // Output: two constructed stylesheets, with a <style> fallback
     // ---------------------------------------------------------------------------------------------------------------
 
-    function Sink() {
-        this.sheet = null;
-        this.el = null;
-        try { this.sheet = new CSSStyleSheet(); } catch (e) { /* fallback to <style> */ }
+    class Sink {
+        constructor() {
+            this.el = null;
+            try { this.sheet = new CSSStyleSheet(); } catch { this.sheet = null; }
+        }
+
+        set(css) {
+            if (this.sheet) {
+                try { this.sheet.replaceSync(css); return; } catch { this.sheet = null; }
+            }
+            if (!this.el) {
+                this.el = document.createElement("style");
+                this.el.setAttribute("data-rme", "");
+            }
+            this.el.textContent = css;
+            if (!this.el.isConnected) (document.head || document.documentElement).appendChild(this.el);
+        }
     }
 
     const baseSink = new Sink();
     const siteSink = new Sink();
     const ours = new Set([baseSink.sheet, siteSink.sheet]);
 
-    Sink.prototype.set = function (css) {
-        if (this.sheet) {
-            try { this.sheet.replaceSync(css); return; }
-            catch (e) { this.sheet = null; }
-        }
-        if (!this.el) {
-            this.el = document.createElement("style");
-            this.el.setAttribute("data-rme", "");
-        }
-        this.el.textContent = css;
-        if (!this.el.isConnected) (document.head || document.documentElement).appendChild(this.el);
-    };
-
-    // Keep our sheets last in the cascade (a page may have adopted its own sheets since we last looked)
+    // Keep our sheets last in the cascade; a page may have adopted its own since we looked
     function attach() {
         if (!baseSink.sheet || !siteSink.sheet) return;
+
         try {
-            const cur = document.adoptedStyleSheets;
-            const want = Array.prototype.filter.call(cur, function (s) { return !ours.has(s); }).concat([baseSink.sheet, siteSink.sheet]);
+            const current = [...document.adoptedStyleSheets];
+            const wanted = [...current.filter(s => !ours.has(s)), baseSink.sheet, siteSink.sheet];
 
-            if (cur.length !== want.length || want.some(function (s, i) { return cur[i] !== s; })) {
-                document.adoptedStyleSheets = want;
-            }
+            if (wanted.some((s, i) => current[i] !== s) || current.length !== wanted.length) document.adoptedStyleSheets = wanted;
         }
-        catch (e) {
-            baseSink.sheet = siteSink.sheet = null;     // adoption not possible here, use <style> elements
+        catch {
+            baseSink.sheet = siteSink.sheet = null;     // adoption not possible here, fall back to <style>
         }
-    }
-
-    function clearOutput() {
-        baseSink.set("");
-        siteSink.set("");
-        attach();
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // Analysis helpers
+    // Analysis
     // ---------------------------------------------------------------------------------------------------------------
 
     function analyze(value) {
-        let a = analysisCache.get(value);
-
-        if (a === undefined) {
-            a = F.analyzeStack(value, cfg.matchers);
-            analysisCache.set(value, a);
-        }
-        return a;
+        if (!st.analysis.has(value)) st.analysis.set(value, F.analyzeStack(value, cfg.matchers));
+        return st.analysis.get(value);
     }
+
+    // A pure "sans-serif" stack already follows the browser setting, so it is only forced for a custom font
+    const overridable = a => !!a && isCat(a.cat) && !(a.pure && cfg.fonts[a.cat].source !== "custom");
+
+    const familyOf = cat => F.familyValue(cat, cfg.fonts);
 
     /*
-     * @param defer true when the names were found inside a self-measuring editor. A monospace font the editor was
-     *              already using must not be swapped under it (it measured the old one and would draw the cursor in
-     *              the wrong place), unless it is in the base sheet, which is applied before any page script runs.
+     * @param defer true for names found inside a self-measuring editor: a monospace font it was already using must not
+     *              be swapped under it, unless it is in the base sheet (applied before any page script runs).
      */
     function registerNames(a, defer) {
-        for (let i = 0; i < a.names.length; i++) {
-            const n = a.names[i];
+        for (const n of a.names) {
+            if (!isCat(n.cat) || cfg.chosenLower.has(n.lower) || st.faces.has(n.lower) || lateNames.has(n.lower)) continue;
 
-            if (CATS.indexOf(n.cat) > -1 && !cfg.chosenLower.has(n.lower) && !acc.faces.has(n.lower) && !lateNames.has(n.lower)) {
-                if (defer && n.cat === "mono" && !cfg.preFaces.has(n.lower)) {
-                    lateNames.set(n.lower, n.name);
-                    learnQueue.add(n.name);
-                    continue;
-                }
-
-                acc.faces.set(n.lower, { name: n.name, cat: n.cat });
+            if (defer && n.cat === "mono" && !cfg.preFaces.has(n.lower)) {
+                lateNames.set(n.lower, n.name);
+                learnQueue.add(n.name);
             }
+            else st.faces.set(n.lower, { name: n.name, cat: n.cat });
         }
     }
 
-    // Our monospace rules must not reach into editors (they would resize / respace text the editor positions by itself)
-    function wrap(css) {
-        return cfg.protectSel ? "@scope (:root) to (" + cfg.protectSel + "){" + css + "}" : css;
-    }
-
-    function isA(rule, ctor, legacyType) {
-        const C = self[ctor];
-        return C ? rule instanceof C : rule.type === legacyType;
-    }
+    // Our monospace rules must not reach into editors: they would resize and respace text the editor positions itself
+    const wrap = css => cfg.protectSel ? `@scope (:root) to (${cfg.protectSel}){${css}}` : css;
 
     // ---------------------------------------------------------------------------------------------------------------
     // Stylesheet walking
     // ---------------------------------------------------------------------------------------------------------------
 
-    const VAR_SCOPE = /^(:root|html|body)\b/i;
+    function isRule(rule, ctor) {
+        const C = self[ctor];
+        return C ? rule instanceof C : rule.type === RULE_TYPES[ctor];
+    }
+
+    // Custom properties holding a font stack (--font-body: ...) are overridden where they are defined
+    function overrideCustomProps(rule) {
+        const { style } = rule;
+        let decls = "";
+
+        for (let i = 0; i < style.length; i++) {
+            const prop = style[i];
+            if (!prop.startsWith("--")) continue;
+
+            const value = style.getPropertyValue(prop).trim();
+            if (!value || value.length > 500 || value.includes("(") || !F.looksLikeFontStack(value, prop)) continue;
+
+            const a = analyze(value);
+            if (overridable(a)) {
+                registerNames(a);
+                decls += `${prop}:${familyOf(a.cat)}!important;`;
+            }
+        }
+        if (decls) st.vars.push(`${rule.selectorText}{${decls}}`);
+    }
 
     function onStyleRule(rule) {
         const sel = rule.selectorText;
-        const ff = rule.style.fontFamily;
+        const a = rule.style.fontFamily && analyze(rule.style.fontFamily);
 
-        if (ff) {
-            const a = analyze(ff);
-
-            if (a) {
-                registerNames(a);
-
-                if (CATS.indexOf(a.cat) > -1 && sel && sel.charAt(0) !== "*" && !(a.pure && cfg.fonts[a.cat].source !== "custom")) {
-                    acc.sel[a.cat].add(sel);    // a pure "sans-serif" stack already follows the browser setting
-                }
-            }
+        if (a) {
+            registerNames(a);
+            if (overridable(a) && sel && sel[0] !== "*") st.sel[a.cat].add(sel);
         }
-
-        if (sel && VAR_SCOPE.test(sel)) {
-            const style = rule.style;
-            let decls = "";
-
-            for (let i = 0; i < style.length; i++) {
-                const p = style[i];
-
-                if (p.charCodeAt(0) !== 45 || p.charCodeAt(1) !== 45) continue;     // custom properties only
-
-                const v = style.getPropertyValue(p).trim();
-
-                if (!v || v.length > 500 || v.indexOf("(") > -1 || !F.looksLikeFontStack(v, p)) continue;
-
-                const a = analyze(v);
-
-                if (a && CATS.indexOf(a.cat) > -1 && !(a.pure && cfg.fonts[a.cat].source !== "custom")) {
-                    registerNames(a);
-                    decls += p + ":" + F.familyValue(a.cat, cfg.fonts) + "!important;";
-                }
-            }
-            if (decls) acc.vars.push(sel + "{" + decls + "}");
-        }
+        if (sel && VAR_SCOPE.test(sel)) overrideCustomProps(rule);
     }
 
     function scanRule(rule, parent, depth) {
-        if (isA(rule, "CSSStyleRule", 1)) {                             // check first: style rules can have nested rules
-            onStyleRule(rule);
-        }
-        else if (isA(rule, "CSSFontFaceRule", 5)) {
-            acc.faceRules.push({ rule: rule, parent: parent });
-        }
-        else if (isA(rule, "CSSImportRule", 3)) {
-            if (rule.styleSheet && depth < 4) scanSheet(rule.styleSheet, depth + 1);
-        }
-        else if (depth < 6 && rule.cssRules && !isA(rule, "CSSKeyframesRule", 7)) {   // @media, @supports, @layer, @container...
-            for (let i = 0; i < rule.cssRules.length; i++) scanRule(rule.cssRules[i], rule, depth + 1);
+        if (isRule(rule, "CSSStyleRule")) onStyleRule(rule);               // first: style rules can have nested rules
+        else if (isRule(rule, "CSSFontFaceRule")) st.faceRules.push({ rule, parent });
+        else if (isRule(rule, "CSSImportRule")) { if (rule.styleSheet && depth < 4) scanSheet(rule.styleSheet, depth + 1); }
+        else if (depth < 6 && rule.cssRules && !isRule(rule, "CSSKeyframesRule")) {    // @media, @supports, @layer...
+            for (const child of rule.cssRules) scanRule(child, rule, depth + 1);
         }
     }
 
-    // Returns true if the sheet had new rules
-    function scanSheet(sheet, depth) {
-        if (ours.has(sheet) || unreadable.has(sheet)) return false;
+    // @return true when the sheet had rules we had not seen
+    function scanSheet(sheet, depth = 0) {
+        if (ours.has(sheet) || st.unreadable.has(sheet)) return false;
 
         let rules;
-
         try { rules = sheet.cssRules; }
         catch (e) {
-            if (e && e.name === "SecurityError") unreadable.add(sheet);     // cross-origin, the manual list covers these
+            if (e && e.name === "SecurityError") st.unreadable.add(sheet);    // cross-origin; manual list and document.fonts cover it
             return false;
         }
-        if (!rules) return false;
 
-        const start = processed.get(sheet) || 0;
-        const n = rules.length;
+        const start = st.processed.get(sheet) || 0;
+        if (!rules || (st.processed.has(sheet) && rules.length === start)) return false;
 
-        if (processed.has(sheet) && n === start) return false;
-
-        processed.set(sheet, n);
-
-        for (let i = start; i < n; i++) scanRule(rules[i], sheet, depth);
-
+        st.processed.set(sheet, rules.length);
+        for (let i = start; i < rules.length; i++) scanRule(rules[i], sheet, depth);
         return true;
     }
 
     function scanDocument() {
         let changed = false;
-        const sheets = document.styleSheets;
-
-        for (let i = 0; i < sheets.length; i++) changed = scanSheet(sheets[i], 0) || changed;
-
-        const adopted = document.adoptedStyleSheets;
-
-        for (let i = 0; i < adopted.length; i++) changed = scanSheet(adopted[i], 0) || changed;
-
+        for (const sheet of [...document.styleSheets, ...document.adoptedStyleSheets]) changed = scanSheet(sheet) || changed;
         return changed;
     }
 
+    const unquote = s => s.replace(/^\s*["']|["']\s*$/g, "");
+
     // Remove the page's own @font-face rules for families we override, so they cannot compete with ours
     function deleteFontFaces() {
-        for (let i = acc.faceRules.length - 1; i >= 0; i--) {
-            const item = acc.faceRules[i];
-            let family = "";
+        st.faceRules = st.faceRules.filter(({ rule, parent }) => {
+            let family;
+            try { family = norm(unquote(rule.style.getPropertyValue("font-family"))); } catch { return true; }
 
-            try { family = item.rule.style.getPropertyValue("font-family"); } catch (e) { continue; }
-
-            family = F.norm(family.replace(/^\s*["']|["']\s*$/g, ""));
-
-            if (!acc.faces.has(family) && !cfg.manualFaces.has(family)) continue;
-
-            acc.faceRules.splice(i, 1);
+            if (!st.faces.has(family) && !cfg.preFaces.has(family)) return true;
 
             try {
-                const rules = item.parent.cssRules;
-                const idx = Array.prototype.indexOf.call(rules, item.rule);
+                const idx = Array.prototype.indexOf.call(parent.cssRules, rule);
+                const count = st.processed.get(parent);
 
                 if (idx > -1) {
-                    const cnt = processed.get(item.parent);
-                    item.parent.deleteRule(idx);
-                    if (cnt !== undefined && idx < cnt) processed.set(item.parent, cnt - 1);
+                    parent.deleteRule(idx);
+                    if (count !== undefined && idx < count) st.processed.set(parent, count - 1);
                 }
             }
-            catch (e) { /* cross-origin or read-only sheet */ }
-        }
+            catch { /* cross-origin or read-only sheet */ }
+            return false;
+        });
     }
 
-    // Faces the page declared, read from document.fonts. Works for stylesheets blocked by CORS and for FontFace() created in JS.
+    // Faces the page declared, read from document.fonts: works for blocked stylesheets and for FontFace() made in JS
     function readPageFaces() {
+        const fonts = document.fonts;
+        if (!fonts || (fonts.size !== undefined && fonts.size === st.fontCount)) return false;
+
+        st.fontCount = fonts.size;
         let changed = false;
 
-        try {
-            document.fonts.forEach(function (f) {
-                const family = String(f.family).replace(/^\s*["']|["']\s*$/g, "");
-                const lower = F.norm(family);
-                const key = lower + "|" + f.weight + "|" + f.style + "|" + f.stretch;
+        fonts.forEach(f => {
+            const family = unquote(String(f.family));
+            const lower = norm(family);
+            const key = `${lower}|${f.weight}|${f.style}|${f.stretch}`;
 
-                if (acc.faceKeys.has(key)) return;     // also skips our own faces, which show up in document.fonts too
+            if (st.faceKeys.has(key)) return;           // also skips our own faces, which show up here too
+            st.faceKeys.add(key);
 
-                acc.faceKeys.add(key);
+            const desc = { family, lower, weight: f.weight, style: f.style, stretch: f.stretch };
+            if (!F.isStandardFace(desc)) { st.pageFaces.set(key, desc); changed = true; }
 
-                const desc = { family: family, lower: lower, weight: f.weight, style: f.style, stretch: f.stretch };
-
-                if (!F.isStandardFace(desc)) { acc.pageFaces.set(key, desc); changed = true; }
-
-                const cat = F.classifyName(lower, cfg.matchers);
-
-                if (CATS.indexOf(cat) > -1 && !cfg.chosenLower.has(lower) && !acc.faces.has(lower) && !lateNames.has(lower)) {
-                    acc.faces.set(lower, { name: family, cat: cat });
-                    changed = true;
-                }
-            });
-        }
-        catch (e) { /* document.fonts unavailable */ }
-
+            const cat = F.classifyName(lower, cfg.matchers);
+            if (isCat(cat) && !cfg.chosenLower.has(lower) && !st.faces.has(lower) && !lateNames.has(lower)) {
+                st.faces.set(lower, { name: family, cat });
+                changed = true;
+            }
+        });
         return changed;
     }
 
@@ -288,63 +268,168 @@
     // ---------------------------------------------------------------------------------------------------------------
 
     function faceCss(name, cat) {
-        return F.fontFaceCss(name, cat, cfg.fonts[cat].name, cfg.monoScale);
+        const key = `${name}|${cat}`;
+        if (!st.faceCss.has(key)) st.faceCss.set(key, F.fontFaceCss(name, cat, cfg.fonts[cat].name, cfg.monoScale));
+        return st.faceCss.get(key);
     }
 
     function buildBaseCss() {
         const out = [];
 
-        cfg.settings.manualFonts.forEach(function (f) {
-            const k = F.norm(f.name);
-            if (CATS.indexOf(f.category) > -1 && !cfg.chosenLower.has(k) && !lateNames.has(k)) out.push(faceCss(f.name, f.category));
-        });
-        cfg.seedNames.forEach(function (name) { out.push(faceCss(name, "mono")); });
+        for (const f of cfg.settings.manualFonts) {
+            const k = norm(f.name);
+            if (isCat(f.category) && !cfg.chosenLower.has(k) && !lateNames.has(k)) out.push(faceCss(f.name, f.category));
+        }
+        for (const name of cfg.seedNames) out.push(faceCss(name, "mono"));
 
         out.push(wrap(F.monoDefaultsCss(cfg)));
 
+        // Editor detector: the hidden input of an editor runs a 1 ms no-op animation, which tells us it just appeared
+        if (cfg.protectSel) {
+            out.push("@keyframes rme-seen{from{outline-offset:0}to{outline-offset:0}}");
+            out.push(`${F.EDITOR_PROXY}{animation:rme-seen .001s}`);
+        }
         return out.join("\n");
     }
 
     function detectBodyCat() {
-        if (bodyCat || !document.body) return;
+        if (st.bodyCat || !document.body) return;
 
         const a = analyze(getComputedStyle(document.body).fontFamily);
-
-        if (a && CATS.indexOf(a.cat) > -1) bodyCat = a.cat;
+        if (a && isCat(a.cat)) st.bodyCat = a.cat;
     }
 
     function buildSiteCss() {
         const out = [];
 
-        acc.faces.forEach(function (f) { out.push(faceCss(f.name, f.cat)); });
+        st.faces.forEach(f => out.push(faceCss(f.name, f.cat)));
 
-        acc.pageFaces.forEach(function (pf) {
-            if (F.isStandardFace(pf)) return;
-
-            const known = acc.faces.get(pf.lower);
+        st.pageFaces.forEach(pf => {
+            const known = st.faces.get(pf.lower);
             const cat = known ? known.cat : cfg.matchers.manual.get(pf.lower);
-
-            if (CATS.indexOf(cat) > -1 && !cfg.chosenLower.has(pf.lower)) {
-                const css = F.fontFaceExtraCss(pf.family, cat, cfg.fonts[cat].name, cfg.monoScale, pf);
-                if (css) out.push(css);
-            }
+            const css = isCat(cat) && !cfg.chosenLower.has(pf.lower) && F.fontFaceExtraCss(pf.family, cat, cfg.fonts[cat].name, cfg.monoScale, pf);
+            if (css) out.push(css);
         });
 
-        CATS.forEach(function (cat) {
-            if (!acc.sel[cat].size) return;
+        for (const cat of CATS) {
+            if (!st.sel[cat].size) continue;
 
-            const selectors = Array.from(acc.sel[cat]).join(",");
+            const selectors = [...st.sel[cat]].join(",");
+            out.push(cat === "mono" ? wrap(F.monoRule(selectors, cfg)) : `${selectors}{font-family:${familyOf(cat)}!important}`);
+        }
 
-            out.push(cat === "mono" ? wrap(F.monoRule(selectors, cfg)) : selectors + "{font-family:" + F.familyValue(cat, cfg.fonts) + "!important}");
-        });
-
-        out.push.apply(out, acc.vars);
+        out.push(...st.vars);
 
         detectBodyCat();
-
-        if (bodyCat) out.push("html,body{font-family:" + F.familyValue(bodyCat, cfg.fonts) + "!important}");
+        if (st.bodyCat) out.push(`html,body{font-family:${familyOf(st.bodyCat)}!important}`);
 
         return out.join("\n");
+    }
+
+    function rebuild() {
+        const css = buildSiteCss();
+
+        if (css !== st.lastCss) {
+            st.lastCss = css;
+            siteSink.set(css);
+        }
+        attach();
+    }
+
+    // New families were found: regenerate the CSS and drop the page's competing rules
+    function commit() {
+        readPageFaces();
+        rebuild();
+        deleteFontFaces();
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Sampling computed styles: catches what the stylesheet walk cannot see (CORS-blocked CSS, var(--x), inline styles)
+    // ---------------------------------------------------------------------------------------------------------------
+
+    // Light DOM plus open shadow roots (custom-element sites such as developers.google.com)
+    function collectElements(root, limit) {
+        const out = [], stack = [root];
+
+        while (stack.length && out.length < limit) {
+            for (const el of stack.pop().querySelectorAll("*")) {
+                if (out.length >= limit) break;
+                out.push(el);
+                if (el.shadowRoot) stack.push(el.shadowRoot);
+            }
+        }
+        return out;
+    }
+
+    const inEditor = el => !!cfg.protectSel && el.closest(cfg.protectSel) !== null;
+
+    // @return true when a new family was registered. Elements are de-duplicated by tag + class + inline style.
+    function processElement(el, editor) {
+        const key = `${el.nodeName}|${el.getAttribute("class") || ""}|${el.getAttribute("style") || ""}`;
+        if (st.sampled.has(key)) return false;
+        st.sampled.add(key);
+
+        const a = analyze(getComputedStyle(el).fontFamily);
+        if (!a) return false;
+
+        const before = st.faces.size;
+        registerNames(a, editor);
+        return st.faces.size !== before;
+    }
+
+    // Tell the service worker which monospace fonts editors revealed, so the next load applies them from the first paint
+    function flushLearn() {
+        if (!learnQueue.size) return;
+
+        const names = [...learnQueue];
+        learnQueue.clear();
+
+        try { Promise.resolve(chrome.runtime.sendMessage({ type: "rme:learn", names })).catch(() => {}); }
+        catch { /* extension was reloaded: this script is orphaned */ }
+    }
+
+    // An editor appeared (its hidden input started the animation from the base sheet): look inside it right away
+    function onEditorSeen(e) {
+        if (e.animationName !== "rme-seen" || !cfg || !cfg.protectSel) return;
+
+        let root = e.target;
+        for (let i = 0; i < 2 && root.parentElement && root.parentElement !== document.body && root.parentElement !== document.documentElement; i++) {
+            root = root.parentElement;
+        }
+
+        const els = [root, ...[...root.querySelectorAll("*")].slice(0, 400)];
+        let added = false;
+
+        for (const el of els) added = processElement(el, true) || added;
+
+        flushLearn();
+        if (added) commit();
+    }
+
+    let sampling = false, sampleAgain = false;
+
+    function sample() {
+        if (sampling) { sampleAgain = true; return; }
+        if (!document.body) return;
+
+        sampling = true;
+        st.sampledOnce = true;
+
+        const els = collectElements(document.body, SAMPLE_LIMIT);
+        let i = 0, added = false;
+
+        const chunk = () => {
+            if (!cfg) { sampling = false; return; }
+
+            for (const end = Math.min(i + CHUNK, els.length); i < end; i++) added = processElement(els[i], inEditor(els[i])) || added;
+            if (i < els.length) { setTimeout(chunk, 0); return; }
+
+            sampling = false;
+            flushLearn();
+            if (added) commit();
+            if (sampleAgain) { sampleAgain = false; sample(); }
+        };
+        chunk();
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -356,99 +441,7 @@
     function schedule(delay) {
         if (timer || !cfg) return;
 
-        timer = setTimeout(function () {
-            timer = 0;
-            run();
-        }, delay);
-    }
-
-    function rebuild() {
-        const css = buildSiteCss();
-
-        if (css !== lastSiteCss) {
-            lastSiteCss = css;
-            siteSink.set(css);
-        }
-        attach();
-    }
-
-    /*
-     * Second source of truth: the fonts the browser actually computed for the page's elements.
-     * This catches everything the stylesheet walk cannot see: stylesheets blocked by CORS (CDN-hosted CSS),
-     * font-family: var(--x), inline styles. Elements are de-duplicated by tag + class + style and processed in small
-     * chunks so the page never stutters. Names found here are overridden through @font-face, like all others.
-     */
-    // Light DOM plus open shadow roots (custom-element sites such as developers.google.com)
-    function collectElements(root, limit) {
-        const out = [], stack = [root];
-
-        while (stack.length && out.length < limit) {
-            const node = stack.pop();
-            const all = node.querySelectorAll("*");
-
-            for (let i = 0; i < all.length && out.length < limit; i++) {
-                out.push(all[i]);
-                if (all[i].shadowRoot) stack.push(all[i].shadowRoot);
-            }
-        }
-        return out;
-    }
-
-    let sampling = false, sampleAgain = false, sampledKeys, sampledOnce;
-
-    // Tell the service worker which monospace fonts editors revealed, so they are applied from the first paint next time
-    function flushLearn() {
-        if (!learnQueue.size) return;
-
-        const names = Array.from(learnQueue);
-        learnQueue.clear();
-
-        if (!cfg || !cfg.settings.editors.autoLearn) return;
-
-        try { chrome.runtime.sendMessage({ type: "rme:learn", names: names }, function () { void chrome.runtime.lastError; }); }
-        catch (e) { /* orphaned */ }
-    }
-
-    function sample() {
-        if (sampling) { sampleAgain = true; return; }
-        if (!document.body) return;
-
-        sampling = true;
-        sampledOnce = true;
-
-        const els = collectElements(document.body, 6000);
-        const max = els.length;
-        let i = 0, added = false;
-
-        (function chunk() {
-            if (!cfg) { sampling = false; return; }
-
-            const end = Math.min(i + 250, max);
-
-            for (; i < end; i++) {
-                const el = els[i];
-                const key = el.nodeName + "|" + (el.getAttribute("class") || "") + "|" + (el.getAttribute("style") || "");
-
-                if (sampledKeys.has(key)) continue;
-                sampledKeys.add(key);
-
-                const a = analyze(getComputedStyle(el).fontFamily);
-
-                if (a) {
-                    const before = acc.faces.size;
-                    registerNames(a, !!cfg.protectSel && el.closest(cfg.protectSel) !== null);
-                    if (acc.faces.size !== before) added = true;
-                }
-            }
-
-            if (i < max) { setTimeout(chunk, 0); return; }
-
-            sampling = false;
-            flushLearn();
-
-            if (added) { readPageFaces(); rebuild(); deleteFontFaces(); }
-            if (sampleAgain) { sampleAgain = false; sample(); }
-        })();
+        timer = setTimeout(() => { timer = 0; run(); }, delay);
     }
 
     function run() {
@@ -456,10 +449,9 @@
 
         const changed = scanDocument() | readPageFaces();      // not ||: both must run
 
-        if (changed || lastSiteCss === null || !bodyCat) rebuild();     // nothing new, nothing to regenerate
-
+        if (changed || st.lastCss === null || !st.bodyCat) rebuild();
         if (changed) deleteFontFaces();
-        if (changed || !sampledOnce) sample();
+        if (changed || !st.sampledOnce) sample();
     }
 
     let listening = false;
@@ -468,194 +460,155 @@
         if (listening) return;
         listening = true;
 
-        const start = function () {
+        const start = () => {
             schedule(0);
-            setTimeout(function () { schedule(0); }, 100);      // some sites only settle after their first scripts ran
+            setTimeout(() => schedule(0), 100);                 // some sites only settle after their first scripts ran
 
-            const head = document.head;
-
-            if (head) {
-                new MutationObserver(function (muts) {
-                    for (let i = 0; i < muts.length; i++) {
-                        const added = muts[i].addedNodes;
-
-                        for (let n = 0; n < added.length; n++) {
-                            const tag = added[n].nodeName;
-                            if (tag === "STYLE" || tag === "LINK") { schedule(150); return; }
-                        }
-                    }
-                }).observe(head, { childList: true });
+            if (document.head) {
+                new MutationObserver(mutations => {
+                    const styled = mutations.some(m => [...m.addedNodes].some(n => n.nodeName === "STYLE" || n.nodeName === "LINK"));
+                    if (styled) schedule(150);
+                }).observe(document.head, { childList: true });
             }
         };
 
         if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
         else start();
 
-        // <link rel=stylesheet> finished loading, so its rules are readable now
-        document.addEventListener("load", function (e) {
-            if (e.target && e.target.nodeName === "LINK") schedule(50);
-        }, true);
-
-        try { document.fonts.addEventListener("loadingdone", function () { schedule(50); }); } catch (e) { /* optional */ }
-
-        window.addEventListener("load", function () { schedule(50); setTimeout(function () { schedule(0); }, 500); });
+        document.addEventListener("animationstart", onEditorSeen, true);
+        document.addEventListener("load", e => { if (e.target && e.target.nodeName === "LINK") schedule(50); }, true);   // its rules are readable now
+        if (document.fonts) document.fonts.addEventListener("loadingdone", () => schedule(50));
+        window.addEventListener("load", () => { schedule(50); setTimeout(() => schedule(0), 500); });
     }
 
     // ---------------------------------------------------------------------------------------------------------------
     // Configuration
     // ---------------------------------------------------------------------------------------------------------------
 
-    function hostsToCheck() {
-        const hosts = [location.hostname];
+    const validSelector = sel => {
+        try { return !self.CSS || !CSS.supports || CSS.supports(`selector(${sel})`); } catch { return false; }
+    };
 
-        try {
-            const ao = location.ancestorOrigins;    // let an excluded top-level site also exclude its iframes
-            if (ao && ao.length) hosts.push(new URL(ao[ao.length - 1]).hostname);
-        }
-        catch (e) { /* ignore */ }
+    // Editors are found automatically (RME.editorBoundary); needs @scope and :has(), i.e. Chrome 118+
+    function editorSelector(editors) {
+        if (!editors.protect || matchesHosts(editors.offSites) || typeof CSSScopeRule === "undefined") return "";
 
-        return hosts;
+        const sel = F.editorBoundary(editors.selectors.filter(validSelector));
+        return validSelector(sel) ? sel : "";
     }
 
-    function configure(rawSettings, bf) {
-        const settings = F.normalizeSettings(rawSettings);
+    function turnOff(reason) {
+        cfg = null;
+        offReason = reason;
+        baseSink.set("");
+        siteSink.set("");
+        attach();
+    }
 
-        analysisCache = new Map();
-        processed = new WeakMap();
-        unreadable = new WeakSet();
-        acc = { faces: new Map(), pageFaces: new Map(), faceKeys: new Set(), faceRules: [], sel: { sans: new Set(), serif: new Set(), mono: new Set() }, vars: [] };
-        bodyCat = null;
-        sampledKeys = new Set();
-        sampledOnce = false;
-        lastSiteCss = null;
-        baseCss = null;
+    function configure(settings, bf) {
+        st = freshState();
 
-        if (!settings.enabled) { cfg = null; offReason = "disabled"; clearOutput(); return; }
+        if (!settings.enabled) return turnOff("disabled");
+        if (matchesHosts(settings.excludedSites)) return turnOff("excluded");
 
-        if (hostsToCheck().some(function (h) { return F.isExcluded(h, settings.excludedSites); })) {
-            cfg = null; offReason = "excluded"; clearOutput(); return;
-        }
-
-        const r = F.resolveFonts(settings, bf);
-
-        // Editors to protect: only valid selectors, and only where @scope exists (Chrome 118+)
-        const protectSel = settings.editors.protect && typeof CSSScopeRule !== "undefined"
-            ? settings.editors.selectors.filter(function (x) {
-                if (settings.editors.off.indexOf(x) > -1) return false;        // switched off from the popup
-                try { return !self.CSS || !CSS.supports || CSS.supports("selector(" + x + ")"); } catch (e) { return false; }
-            }).join(",") : "";
-
-        const manualAll = new Set(settings.manualFonts.map(function (f) { return F.norm(f.name); }));
-        const chosen = new Set(F.CATS.map(function (c) { return F.norm(r.fonts[c].name); }));
-        const seedNames = settings.mono.seed
-            ? settings.mono.seedNames.filter(function (n) { const k = F.norm(n); return !manualAll.has(k) && !chosen.has(k) && !lateNames.has(k); })
-            : [];
+        const { fonts, monoSize, monoScale } = F.resolveFonts(settings, bf);
+        const chosenLower = new Set(CATS.map(c => norm(fonts[c].name)));
+        const listed = new Set(settings.manualFonts.map(f => norm(f.name)));
+        const seedNames = F.MONO_SEED.filter(n => !listed.has(norm(n)) && !chosenLower.has(norm(n)) && !lateNames.has(norm(n)));
 
         cfg = {
-            settings: settings,
-            fonts: r.fonts,
-            monoSize: r.monoSize,
-            monoScale: r.monoScale,
+            settings, fonts, monoSize, monoScale, chosenLower, seedNames,
             matchers: F.buildMatchers(settings),
-            chosenLower: new Set(F.CATS.map(function (c) { return F.norm(r.fonts[c].name); })),
-            protectSel: protectSel,
-            seedNames: seedNames,
-            // everything already declared in the base sheet, i.e. in place before any page script runs
-            preFaces: new Set(settings.manualFonts.filter(function (f) { return CATS.indexOf(f.category) > -1 && !lateNames.has(F.norm(f.name)); })
-                .map(function (f) { return F.norm(f.name); }).concat(seedNames.map(F.norm)))
+            protectSel: editorSelector(settings.editors),
+            editorsOffSite: matchesHosts(settings.editors.offSites),
+            // everything declared in the base sheet, i.e. in place before any page script runs
+            preFaces: new Set([
+                ...settings.manualFonts.filter(f => isCat(f.category) && !lateNames.has(norm(f.name))).map(f => norm(f.name)),
+                ...seedNames.map(norm)
+            ])
         };
-        cfg.manualFaces = cfg.preFaces;
 
-        baseCss = buildBaseCss();
-        baseSink.set(baseCss);
+        baseSink.set(buildBaseCss());
         attach();
-
         listen();
 
         if (document.readyState !== "loading") schedule(0);
     }
 
-    function load() {
-        try {
-            chrome.storage.local.get([K.settings, K.fonts], function (data) {
-                if (chrome.runtime.lastError) return;
+    const load = () => F.storage.load().then(({ settings, bf }) => configure(settings, bf)).catch(() => { /* orphaned */ });
 
-                const wasOn = !!cfg;
-
-                configure(data[K.settings], data[K.fonts]);
-
-                if (!wasOn && cfg) schedule(0);
-            });
-        }
-        catch (e) { /* extension was reloaded, this script is orphaned */ }
-    }
-
-    try {
-        chrome.storage.onChanged.addListener(function (changes, area) {
-            if (area === "local" && (changes[K.settings] || changes[K.fonts])) load();     // apply live, no reload needed
-        });
-
-        // The popup asks the top frame which fonts on this page could not be classified
-        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-            if (!msg || msg.type !== "rme:report" || window !== window.top) return;
-
-            sendResponse(buildReport());
-        });
-    }
-    catch (e) { /* orphaned */ }
+    // ---------------------------------------------------------------------------------------------------------------
+    // Report for the popup
+    // ---------------------------------------------------------------------------------------------------------------
 
     function describe(el) {
-        const cls = (typeof el.className === "string" ? el.className : "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
-
-        return (el.localName + (el.id ? "#" + el.id : "") + (cls.length ? "." + cls.join(".") : "")).slice(0, 60);
+        const classes = (typeof el.className === "string" ? el.className : "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
+        return (el.localName + (el.id ? `#${el.id}` : "") + classes.map(c => `.${c}`).join("")).slice(0, 60);
     }
 
-    function buildReport() {
-        const report = { host: location.hostname, active: !!cfg, reason: offReason, unknown: [], deferred: [], editors: [], protect: true };
+    // Editors on the page, named by element. A hidden input only counts when its font is monospace, so ordinary
+    // search boxes (which share the same attributes) are not listed.
+    function findEditors() {
+        const rootSel = [...F.EDITOR_ROOTS, ...cfg.settings.editors.selectors].join(",");
+        const found = new Map();
+        const add = el => {
+            const name = describe(el);
+            if (found.has(name)) found.get(name).count++; else found.set(name, { sample: name, count: 1 });
+        };
+        const isMono = el => { const a = el && analyze(getComputedStyle(el).fontFamily); return !!a && a.cat === "mono"; };
 
-        if (!cfg) return report;
+        try {
+            document.querySelectorAll(rootSel).forEach(add);
 
-        // Which editors are on this page, so the popup can name them and offer a switch for each
-        const ed = cfg.settings.editors;
-        report.protect = !!ed.protect;
-        report.editors = [];
-
-        ed.selectors.forEach(function (sel) {
-            try {
-                const found = document.querySelectorAll(sel);
-
-                if (found.length) report.editors.push({ selector: sel, count: found.length, sample: describe(found[0]), enabled: ed.protect && ed.off.indexOf(sel) === -1 });
+            for (const input of [...document.querySelectorAll(F.EDITOR_PROXY)].slice(0, 50)) {
+                if (!input.closest(rootSel) && (isMono(input) || isMono(input.parentElement))) add(input.parentElement || input);
             }
-            catch (e) { /* invalid selector */ }
-        });
-        report.deferred = Array.from(lateNames.values());
-        report.learned = !!cfg.settings.editors.autoLearn;
+        }
+        catch { /* invalid user selector */ }
 
+        return [...found.values()].slice(0, 6);
+    }
+
+    // Font stacks on the page that could not be classified and have no generic fallback, most used first
+    function findUnknownFonts() {
         const counts = new Map();
-        const els = document.querySelectorAll("*");
-        const max = Math.min(els.length, 8000);
 
-        for (let i = 0; i < max; i++) {
-            const ff = getComputedStyle(els[i]).fontFamily;
+        for (const el of collectElements(document.body || document.documentElement, REPORT_LIMIT)) {
+            const ff = getComputedStyle(el).fontFamily;
             counts.set(ff, (counts.get(ff) || 0) + 1);
         }
 
         const unknown = new Map();
 
-        counts.forEach(function (count, ff) {
+        for (const [ff, count] of counts) {
             const a = analyze(ff);
+            const key = a && a.unknown && norm(a.unknown);
 
-            if (a && a.unknown && !cfg.matchers.manual.has(F.norm(a.unknown))) {
-                const key = F.norm(a.unknown);
-                const cur = unknown.get(key);
-                unknown.set(key, { name: a.unknown, count: (cur ? cur.count : 0) + count });
-            }
-        });
-
-        report.unknown = Array.from(unknown.values()).sort(function (a, b) { return b.count - a.count; }).slice(0, 30);
-
-        return report;
+            if (key && !cfg.matchers.manual.has(key)) unknown.set(key, { name: a.unknown, count: (unknown.has(key) ? unknown.get(key).count : 0) + count });
+        }
+        return [...unknown.values()].sort((a, b) => b.count - a.count).slice(0, 30);
     }
+
+    function buildReport() {
+        const report = { host: location.hostname, active: !!cfg, reason: offReason, unknown: [], deferred: [], editors: [], protect: false, siteOff: false };
+        if (!cfg) return report;
+
+        return Object.assign(report, {
+            protect: !!cfg.protectSel,
+            siteOff: cfg.settings.editors.protect && cfg.editorsOffSite,
+            editors: findEditors(),
+            deferred: [...lateNames.values()],
+            unknown: findUnknownFonts()
+        });
+    }
+
+    try {
+        F.storage.onChange(load);       // apply live, no reload needed
+        chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+            if (msg && msg.type === "rme:report" && window === window.top) reply(buildReport());
+        });
+    }
+    catch { /* orphaned */ }
 
     load();
 })();

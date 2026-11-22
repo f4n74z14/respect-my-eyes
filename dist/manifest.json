@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Respect My Eyes",
-    "version": "2.1.0",
+    "version": "2.3.0",
     "description": "Forces websites to use the serif, sans-serif and monospace fonts from your browser's font settings, without breaking icon fonts.",
     "icons": {
         "16": "icon-16.png",

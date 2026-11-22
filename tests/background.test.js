@@ -34,9 +34,5 @@ vm.runInContext(fs.readFileSync(path.join(__dirname, "../dist/background.js"), "
   assert.strictEqual(names.length, 2, "learned once, no duplicates");
   assert.ok(names.every(f => f.category === "mono"));
 
-  store.rmeSettings.editors.autoLearn = false;
-  await new Promise(r => onMessage({ type: "rme:learn", names: ["Nope Mono"] }, {}, r));
-  assert.ok(!store.rmeSettings.manualFonts.some(f => f.name === "Nope Mono"), "autoLearn can be switched off");
-
   console.log("background.test.js: migration + refresh + learn ok");
 })().catch(e => { console.error(e); process.exit(1); });

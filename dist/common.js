@@ -53,7 +53,7 @@
     ];
 
     const DEFAULT_SETTINGS = {
-        version: 3,
+        version: 4,
         enabled: true,
         excludedSites: [],
         fonts: {
@@ -66,21 +66,35 @@
             customSize: 13,
             scaleMode: "auto",      // auto | custom | off     (size-adjust for monospace @font-face overrides)
             customScale: 81.25,
-            textarea: false,        // force the monospace font on <textarea> (opt-in: many sites mirror their text boxes)
-            seed: true,             // apply the names below from the very first paint
-            seedNames: MONO_SEED.slice()
+            textarea: false         // force the monospace font on <textarea> (opt-in: many sites mirror their text boxes)
         },
-        // Components that measure their own font (cursor / selection / column math). They are exempt from our forced
-        // size and letter-spacing, and fonts they only reveal late are not swapped under them.
+        // Code editors measure their own font (cursor / selection / column math). They are found automatically (see
+        // editorBoundary) and exempt from our forced size and letter-spacing; a monospace font they were already
+        // using is not swapped under them, it is learned for the next load instead.
         editors: {
             protect: true,
-            autoLearn: true,        // a monospace font an editor reveals late is remembered and applied from the first paint next time
-            off: [],                // selectors from the list below that the user switched off (e.g. from the popup)
-            selectors: [".monaco-editor", ".cm-editor", ".CodeMirror", ".ace_editor", ".xterm", "[contenteditable]"]
+            selectors: [],          // extra editor roots, for the rare editor the automatic detection misses
+            offSites: []            // sites where protection is switched off (from the popup)
         },
         manualFonts: DEFAULT_MANUAL_FONTS,
         iconPatterns: []            // extra case-insensitive substrings that mark a font as an icon font
     };
+
+    /*
+     * Automatic detection of code editors. Every mainstream editor routes keyboard input through a hidden element with
+     * browser "magic" switched off: Monaco (textarea, or a role=textbox div in EditContext mode), CodeMirror 6
+     * (role=textbox contenteditable), CodeMirror 5, Ace and xterm.js (textareas). Verified against the sources of
+     * monaco-editor 0.57, @codemirror/view 6.43, codemirror 5.65, ace-builds 1.45 and @xterm/xterm 6.0.
+     * The input element and its two nearest ancestors are the boundary; no class names, no timing, pure CSS, so it also
+     * covers editors that appear after the page loaded. Well-known roots are listed as a fallback.
+     */
+    const EDITOR_PROXY = ':is(textarea,[contenteditable],[role="textbox"])[autocorrect="off"][spellcheck="false"]';
+    const EDITOR_ROOTS = [".monaco-editor", ".cm-editor", ".CodeMirror", ".ace_editor", ".xterm"];
+
+    function editorBoundary(extra) {
+        const P = EDITOR_PROXY;
+        return [P, ":has(> " + P + ")", ":has(> * > " + P + ")"].concat(EDITOR_ROOTS, extra || []).join(",");
+    }
 
     // -----------------------------------------------------------------------------------------------------------------
     // Font name classification (applied to ONE family name at a time, lower-cased)
@@ -163,7 +177,7 @@
 
         const out = [];
         parts.forEach(function (p) {
-            let t = p.trim().replace(/\s*!important$/i, "");
+            const t = p.trim().replace(/\s*!important$/i, "");
             if (!t) return;
             const q = /^(["'])(.*)\1$/.exec(t);
             const name = q ? q[2].trim() : t;
@@ -238,39 +252,45 @@
         return isFinite(v) ? Math.min(max, Math.max(min, v)) : def;
     }
 
+    // Cleans each item (clean() returns a falsy value to drop it), removes duplicates and caps the length
+    function uniqueList(list, clean, key, max) {
+        const seen = new Set(), out = [];
+
+        for (const item of Array.isArray(list) ? list : []) {
+            const value = clean(item);
+            const k = value && (key ? key(value) : value);
+
+            if (!value || seen.has(k)) continue;
+            seen.add(k);
+            out.push(value);
+            if (out.length >= max) break;
+        }
+        return out;
+    }
+
+    // Font names end up inside CSS strings, so quotes and backslashes are dropped
+    function cleanFontName(x) { return String(x || "").trim().replace(/["\\]/g, "").slice(0, 120); }
+
     function cleanHost(h) {
         return String(h || "").trim().toLowerCase()
             .replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/^\*\./, "").replace(/[\/?#].*$/, "").replace(/:\d+$/, "");
     }
 
-    function cleanHostList(list) {
-        const seen = new Set(), out = [];
-        (Array.isArray(list) ? list : []).forEach(function (h) {
-            h = cleanHost(h);
-            if (h && !seen.has(h)) { seen.add(h); out.push(h); }
-        });
-        return out;
+    // User-typed CSS selectors: reject anything that could break out of a selector
+    function cleanSelector(x) {
+        x = String(x || "").trim();
+        return x.length <= 200 && !/[{};@\\]/.test(x) ? x : "";
     }
 
-    // CSS selectors typed by the user: reject anything that could break out of a selector
-    function cleanSelectors(list) {
-        const seen = new Set(), out = [];
-        (Array.isArray(list) ? list : []).forEach(function (x) {
-            x = String(x || "").trim();
-            if (x && x.length <= 200 && !/[{};@\\]/.test(x) && !seen.has(x) && out.length < 40) { seen.add(x); out.push(x); }
-        });
-        return out;
+    function cleanManualFont(f) {
+        const name = f && typeof f.name === "string" ? cleanFontName(f.name) : "";
+        return name && MANUAL_CATS.includes(f.category) ? { name: name, category: f.category } : null;
     }
 
-    function cleanNameList(list) {
-        const seen = new Set(), out = [];
-        (Array.isArray(list) ? list : []).forEach(function (x) {
-            x = String(x || "").trim().replace(/["\\]/g, "").slice(0, 120);
-            const k = norm(x);
-            if (x && !seen.has(k) && out.length < 200) { seen.add(k); out.push(x); }
-        });
-        return out;
-    }
+    const cleanHostList = list => uniqueList(list, cleanHost, null, Infinity);
+    const cleanSelectors = list => uniqueList(list, cleanSelector, null, 40);
+    const cleanNameList = list => uniqueList(list, cleanFontName, norm, 200);
+    const cleanManual = list => uniqueList(list, cleanManualFont, f => norm(f.name), 500);
 
     const CAT_ALIASES = {
         "sans": "sans", "sans-serif": "sans", "sansserif": "sans", "serif": "serif",
@@ -290,7 +310,7 @@
             if (!raw || raw.charAt(0) === "#") return;
 
             const parts = raw.split(/\s*[|\t]\s*/);
-            const name = parts[0].replace(/^["']|["']$/g, "").replace(/["\\]/g, "").trim().slice(0, 120);
+            const name = cleanFontName(parts[0].replace(/^["']|["']$/g, ""));
             let category = defCat;
 
             if (!name) { invalid.push({ line: i + 1, text: raw, reason: "Empty name" }); return; }
@@ -302,19 +322,6 @@
             map.set(norm(name), { name: name, category: category });
         });
         return { entries: Array.from(map.values()), invalid: invalid };
-    }
-
-    function cleanManual(list) {
-        const seen = new Set(), out = [];
-        list.forEach(function (f) {
-            if (!f || typeof f.name !== "string") return;
-            const name = f.name.trim().replace(/["\\]/g, "").slice(0, 120);
-            const key = norm(name);
-            if (!name || seen.has(key) || MANUAL_CATS.indexOf(f.category) === -1 || out.length >= 500) return;
-            seen.add(key);
-            out.push({ name: name, category: f.category });
-        });
-        return out;
     }
 
     function normalizeSettings(raw) {
@@ -330,7 +337,7 @@
             const r = raw.fonts && raw.fonts[c];
             if (r && typeof r === "object") {
                 s.fonts[c].mode = r.mode === "custom" ? "custom" : "browser";
-                s.fonts[c].custom = typeof r.custom === "string" ? r.custom.trim().replace(/["\\]/g, "") : "";
+                s.fonts[c].custom = cleanFontName(r.custom);
             }
         });
 
@@ -341,18 +348,15 @@
             s.mono.scaleMode = ["auto", "custom", "off"].indexOf(m.scaleMode) > -1 ? m.scaleMode : "auto";
             s.mono.customScale = num(m.customScale, 81.25, 25, 200);
             s.mono.textarea = ver >= 3 && m.textarea === true;
-            s.mono.seed = m.seed !== false;
-            if (Array.isArray(m.seedNames)) s.mono.seedNames = cleanNameList(m.seedNames);
         }
 
         const e = raw.editors;
         if (e && typeof e === "object") {
             s.editors.protect = e.protect !== false;
-            s.editors.autoLearn = e.autoLearn !== false;
-            if (Array.isArray(e.off)) s.editors.off = cleanSelectors(e.off);
+            s.editors.offSites = cleanHostList(e.offSites);
+            // v3 stored the built-in roots too; only the user's own additions are kept now
             if (Array.isArray(e.selectors)) {
-                s.editors.selectors = cleanSelectors(e.selectors);
-                if (ver < 3 && s.editors.selectors.indexOf("[contenteditable]") === -1) s.editors.selectors.push("[contenteditable]");
+                s.editors.selectors = cleanSelectors(e.selectors).filter(function (x) { return EDITOR_ROOTS.indexOf(x) === -1 && x !== "[contenteditable]"; });
             }
         }
 
@@ -504,13 +508,30 @@
         return monoRule(sel, cfg);
     }
 
+    // chrome.storage.local access shared by the content script, service worker, popup and options page
+    const storage = {
+        async load() {
+            const data = await chrome.storage.local.get([KEYS.settings, KEYS.fonts]);
+            return { settings: normalizeSettings(data[KEYS.settings]), bf: data[KEYS.fonts] || null };
+        },
+        save(settings) { return chrome.storage.local.set({ [KEYS.settings]: settings }); },
+        // fn(changes) runs when the settings or the cached browser fonts changed
+        onChange(fn) {
+            chrome.storage.onChanged.addListener((changes, area) => {
+                if (area === "local" && (changes[KEYS.settings] || changes[KEYS.fonts])) fn(changes);
+            });
+        }
+    };
+
     root.RME = {
-        KEYS: KEYS, MONO_SEED: MONO_SEED, cleanSelectors: cleanSelectors, cleanNameList: cleanNameList, parseFontLines: parseFontLines, CATS: CATS, MANUAL_CATS: MANUAL_CATS, CAT_LABEL: CAT_LABEL, GENERIC_FALLBACK: GENERIC_FALLBACK,
-        DEFAULT_SETTINGS: DEFAULT_SETTINGS, DEFAULT_MANUAL_FONTS: DEFAULT_MANUAL_FONTS,
-        norm: norm, cssQuote: cssQuote, cleanHost: cleanHost, cleanHostList: cleanHostList, cleanManual: cleanManual,
-        buildMatchers: buildMatchers, classifyName: classifyName, splitFamilies: splitFamilies,
-        analyzeStack: analyzeStack, looksLikeFontStack: looksLikeFontStack,
-        normalizeSettings: normalizeSettings, isExcluded: isExcluded, resolveFonts: resolveFonts,
-        familyValue: familyValue, fontFaceCss: fontFaceCss, fontFaceExtraCss: fontFaceExtraCss, isStandardFace: isStandardFace, monoRule: monoRule, monoDefaultsCss: monoDefaultsCss
+        // data
+        KEYS, CATS, MANUAL_CATS, CAT_LABEL, MONO_SEED, DEFAULT_SETTINGS, EDITOR_PROXY, EDITOR_ROOTS,
+        // settings
+        normalizeSettings, resolveFonts, storage, isExcluded,
+        cleanFontName, cleanHostList, cleanSelectors, cleanNameList, cleanManual, parseFontLines,
+        // font names
+        norm, cssQuote, buildMatchers, classifyName, splitFamilies, analyzeStack, looksLikeFontStack,
+        // css
+        editorBoundary, familyValue, fontFaceCss, fontFaceExtraCss, isStandardFace, monoRule, monoDefaultsCss
     };
 })(typeof self !== "undefined" ? self : this);

@@ -4,15 +4,6 @@ Big thanks to the [Original Project](https://github.com/sysop84/force-my-browser
 
 This is a major rewrite focused on browser-native font preferences, improved icon font compatibility, customization, and performance. Like the original, it is licensed under the GNU GPL v3 (see [`LICENSE`](LICENSE)).
 
-## Demo
-
-`developers.google.com`: many shadow DOMs, variable fonts, dynamic loading.
-<p align="center">
-  <img src="preview.png" alt="Respect My Eyes running on developers.google.com" width="100%">
-</p>
-
-</details>
-
 ## Install
 
 1. Open `chrome://extensions` and enable **Developer mode**.
