@@ -128,6 +128,13 @@ t("parses pasted font lists", () => {
     assert.deepStrictEqual(r.invalid.map(x => [x.line, x.reason]), [[6, 'Unknown category "wat"'], [7, "Empty name"]]);
     });
 
+t("selector sweeps are dropped", () => {
+    assert.deepStrictEqual(F.splitSelectorList('.a, [x="1,2"], :is(.b, .c) > p'), [".a", '[x="1,2"]', ":is(.b, .c) > p"]);
+    assert.strictEqual(F.dropSweeps(".a, .a *, .b > *, .c:hover, .d *::before"), ".a,.c:hover,.d *::before");
+    assert.strictEqual(F.dropSweeps('[x="a,b"] *, .e'), ".e");
+    assert.strictEqual(F.dropSweeps(".only *"), "");
+});
+
 t("exclusion matching", () => {
     assert.ok(F.isExcluded("www.example.com", ["example.com"]));
     assert.ok(F.isExcluded("example.com", ["example.com"]));

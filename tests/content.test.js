@@ -21,8 +21,11 @@ const PAGE_CSS = `
   .plain { font-family: sans-serif; }
   .sys { font-family: system-ui, sans-serif; }
   .serifish { font-family: Georgia, "Times New Roman", serif; }
+  .mce-container, .mce-container * { font-family: Arial, sans-serif; }
+  .mce-ico { font-family: 'tinymce', Arial; }
+  .sweep *, .sys { font-family: system-ui, sans-serif; }
   * { font-family: Arial; }
-  @media (min-width: 600px) { .wide { font-family: Verdana, sans-serif; } }
+  @media (min-width: 600px) { .wide { font-family: "Lucida Grande", sans-serif; } }
   @page { font-family: Arial; }
 `;
 
@@ -109,7 +112,10 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.ok(site.includes("code.hl") && /code\.hl[^}]*font-size:13px!important/.test(site), "mono selector forced with browser size");
   assert.ok(!/\.plain/.test(site), "pure sans-serif stack left to the browser");
   assert.ok(/\.sys/.test(site), "system-ui stack is forced");
-  assert.ok(/\.wide/.test(site), "rules nested in @media are handled");
+  assert.ok(site.includes('@font-face{font-family:"Lucida Grande"'), "rules nested in @media are handled by name");
+  assert.ok(!/\.wide/.test(site), "a named stack is replaced by name, its selector is not mirrored");
+  assert.ok(!/mce-container|mce-ico/.test(site), "page rules like .mce-container * never clobber descendants that have their own icon font");
+  assert.ok(/(^|[},\n])\.sys[,{]/.test(site) && !/\.sweep/.test(site), "generic stacks are mirrored, but never as a sweep over every descendant");
   assert.ok(!/(^|,)\*[,{]/.test(site) && !site.includes(":first"), "universal selector and @page skipped");
   assert.ok(/html,body\{font-family:"Verdana", sans-serif!important\}/.test(site), "html/body follows detected category");
   assert.ok(!/Brand Face/.test(site), "unknown face without fallback is not guessed");

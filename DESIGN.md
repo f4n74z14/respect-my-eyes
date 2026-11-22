@@ -37,7 +37,7 @@ Each family name is classified on its own (icon / sans / serif / mono) by keywor
 - A family name is overridden with `@font-face { src: local("<your font>") }`: four rules per family (regular, bold, italic, bold italic). The override is by name, so it also covers text the page styles from places we cannot see.
 - A page's own `@font-face` rule for a replaced family is deleted where its sheet is readable.
 - Where it cannot be deleted (blocked sheet), the browser merges faces with identical descriptors and the later one wins. So the descriptors the page declared (`font-weight: 1 1000`, `font-stretch: 25% 151%`...) are read from `document.fonts` and copied into our rules. This is what makes variable fonts replaceable.
-- Selectors whose stack is classified get an `!important` rule with the chosen font. A stack that is purely `sans-serif`, `serif` or `monospace` is skipped, since it already follows the browser (unless a custom font is set).
+- Selectors are mirrored (`!important` rule with the chosen font) only where a name cannot be replaced: stacks made of generic families such as `system-ui`, and monospace stacks (for the forced size). A named stack is replaced by name, which keeps the page's cascade intact; mirroring its selector would reorder the cascade and clobber descendants that set their own icon font (a page rule like `.mce-container *` is the classic case). Selectors ending in `*` are never mirrored. A stack that is purely `sans-serif`, `serif` or `monospace` is skipped, since it already follows the browser (unless a custom font is set).
 - `html, body` follow the category detected on the body.
 - All output lives in two constructed stylesheets (a base sheet applied at `document_start` and a site sheet rebuilt on change). They are exempt from page CSP and cheap to replace. A `<style>` fallback exists.
 
@@ -53,7 +53,7 @@ Editors measure the width of a character and cache it, then place the cursor fro
 - Forced monospace size and letter-spacing never reach inside the boundary (`@scope (:root) to (...)`).
 - A monospace font an editor was already using is not swapped under it. It is remembered (service worker, serialized) so the next load applies it from the first paint.
 - Monospace names in the user's list, plus a built-in list of well-known names, are in the base sheet and therefore replaced before any page script runs.
-- A per-site switch and an *Advanced* field for extra roots cover misdetection.
+- A per-site switch and a *Protected areas* field (any selector; all selector-based rules stay out of it) cover misdetection and widgets that look wrong.
 
 ## Performance
 
@@ -68,6 +68,7 @@ Editors measure the width of a character and cache it, then place the cursor fro
 
 | Decision | Benefit | Cost |
 | --- | --- | --- |
+| Mirror selectors only for generic stacks | Page cascade and icon fonts stay intact | A generic `system-ui` rule needs a mirror, so sweeps over descendants are skipped there |
 | Replace by family name with `local()` | Covers text styled anywhere, consistent with what the page measures | A font that is not installed falls back to the page's next font |
 | Copy descriptors from `document.fonts` | Beats unremovable page faces, including variable fonts | A split regular/bold range is approximated with two extra rules |
 | Constructed stylesheets | Immune to page CSP, cheap to update | A page that reassigns `adoptedStyleSheets` can drop them until the next rescan |

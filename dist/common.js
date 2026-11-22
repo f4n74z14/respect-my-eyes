@@ -268,6 +268,26 @@
         return out;
     }
 
+    // Splits a selector list on top-level commas (not those inside (), [] or quotes)
+    function splitSelectorList(text) {
+        const parts = [];
+        let depth = 0, quote = "", current = "";
+
+        for (const ch of text) {
+            if (quote) { if (ch === quote) quote = ""; }
+            else if (ch === '"' || ch === "'") quote = ch;
+            else if ("([".includes(ch)) depth++;
+            else if (")]".includes(ch)) depth--;
+            else if (ch === "," && depth === 0) { parts.push(current.trim()); current = ""; continue; }
+            current += ch;
+        }
+        parts.push(current.trim());
+        return parts.filter(Boolean);
+    }
+
+    // A selector ending in "*" sweeps over every descendant, icon elements included, so it is never mirrored
+    const dropSweeps = text => splitSelectorList(text).filter(s => !/(^|[\s>+~])\*$/.test(s)).join(",");
+
     // Font names end up inside CSS strings, so quotes and backslashes are dropped
     function cleanFontName(x) { return String(x || "").trim().replace(/["\\]/g, "").slice(0, 120); }
 
@@ -532,6 +552,6 @@
         // font names
         norm, cssQuote, buildMatchers, classifyName, splitFamilies, analyzeStack, looksLikeFontStack,
         // css
-        editorBoundary, familyValue, fontFaceCss, fontFaceExtraCss, isStandardFace, monoRule, monoDefaultsCss
+        editorBoundary, splitSelectorList, dropSweeps, familyValue, fontFaceCss, fontFaceExtraCss, isStandardFace, monoRule, monoDefaultsCss
     };
 })(typeof self !== "undefined" ? self : this);

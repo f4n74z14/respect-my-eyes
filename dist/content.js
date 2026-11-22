@@ -172,7 +172,17 @@
 
         if (a) {
             registerNames(a);
-            if (overridable(a) && sel && sel[0] !== "*") st.sel[a.cat].add(sel);
+
+            /*
+             * A named stack is already replaced by its name, which keeps the page's own cascade intact. Mirroring its
+             * selector would reorder that cascade and clobber descendants that set their own (icon) font, e.g.
+             * ".mce-container *". So selectors are mirrored only where a name cannot be replaced: stacks made of
+             * generic families (system-ui...), and monospace stacks, for the forced size.
+             */
+            if (overridable(a) && sel && sel[0] !== "*" && (a.cat === "mono" || !a.names.length)) {
+                const safe = F.dropSweeps(sel);
+                if (safe) st.sel[a.cat].add(safe);
+            }
         }
         if (sel && VAR_SCOPE.test(sel)) overrideCustomProps(rule);
     }
@@ -315,7 +325,7 @@
             if (!st.sel[cat].size) continue;
 
             const selectors = [...st.sel[cat]].join(",");
-            out.push(cat === "mono" ? wrap(F.monoRule(selectors, cfg)) : `${selectors}{font-family:${familyOf(cat)}!important}`);
+            out.push(wrap(cat === "mono" ? F.monoRule(selectors, cfg) : `${selectors}{font-family:${familyOf(cat)}!important}`));
         }
 
         out.push(...st.vars);

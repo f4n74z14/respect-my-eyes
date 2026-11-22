@@ -78,10 +78,10 @@
                 <label class="switch"><input type="checkbox" id="edProtect" aria-label="Protect code editors"><span></span></label>
             </div>
             <details class="setting stack adv">
-                <summary>Advanced</summary>
-                <div class="title">Extra editor selectors</div>
-                <div class="hint">CSS selectors, one per line, for an editor that is not detected on its own.</div>
-                <textarea id="edSelectors" rows="3" spellcheck="false" aria-label="Extra editor selectors"></textarea>
+                <summary>Protected areas</summary>
+                <div class="title">Elements to leave alone</div>
+                <div class="hint">Our style rules never apply inside these elements. One CSS selector per line, e.g. <code>.mce-container</code>. In DevTools: right-click the element, Copy, Copy selector. Use it for an editor that is not detected, or a widget that looks wrong.</div>
+                <textarea id="edSelectors" rows="3" spellcheck="false" placeholder=".mce-container&#10;#my-editor" aria-label="Elements to leave alone"></textarea>
                 <div class="hint warn" id="selHint" role="alert"></div>
             </details>
         </div>

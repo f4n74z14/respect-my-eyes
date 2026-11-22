@@ -51,13 +51,13 @@ Needs a Chromium-based browser, version 118 or newer. Browsers that do not expos
 Open the popup on that page. If the font is listed under *Needs your input*, add it as Sans, Serif or Mono. Fonts with no generic fallback (`font-family: BrandFace;` with no `sans-serif` after it) are the usual cause.
 
 **Icons turned into letters or boxes.**
-Open the popup, find the icon font, choose **Icon**, and reload the page. For a recurring pattern, add a word from its name under *Icon font keywords*.
+Open the popup, find the icon font, choose **Icon**, and reload the page. For a recurring pattern, add a word from its name under *Icon font keywords*. If one widget still looks wrong, add its container (for example `.mce-container`) under *Monospace > Protected areas*: our style rules never apply inside it. In DevTools, right-click the element, Copy, Copy selector.
 
 **The cursor is in the wrong place in an editor or text box.**
 - Switch editor protection off and on again for the site in the popup, or reload the page.
 - Set *Monospace > Scaling* to *None* if the editor should keep exactly the size the site configured.
 - Keep *Monospace > Text boxes* off (the default): many sites mirror their text boxes.
-- An editor that is not detected can be added under *Monospace > Advanced* with a CSS selector of its root element.
+- An editor that is not detected can be added under *Monospace > Protected areas* with a CSS selector of its root element.
 
 **An editor still shows the site's font the first time.**
 The editor had already measured its font, so it is left alone and remembered. Reload the page and it uses your font from the first paint.
@@ -92,4 +92,4 @@ node tests/content.test.js
 node tests/ui.test.js
 ```
 
-How it works, the research behind editor detection and the trade-offs are in [`DESIGN.md`](DESIGN.md).
+How it works, the research behind editor detection and the trade-offs are in [`docs/DESIGN.md`](docs/DESIGN.md).
