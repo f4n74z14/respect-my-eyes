@@ -1,96 +1,95 @@
 # Respect My Eyes
 
-Big thanks to the [Original Project](https://github.com/sysop84/force-my-browser-fonts)!
+Use **your** fonts on every website. The extension replaces the fonts a site picked with the serif, sans-serif and monospace fonts from your browser's font settings, and leaves icons, code editors and layout alone.
 
-This is a major rewrite focused on browser-native font preferences, improved icon font compatibility, customization, and performance. Like the original, it is licensed under the GNU GPL v3 (see [`LICENSE`](LICENSE)).
+Big thanks to the [Original Project](https://github.com/sysop84/force-my-browser-fonts). Licensed under the GNU GPL v3 (see [`LICENSE`](LICENSE)).
+
+## Demo
+
+`developers.google.com`: many shadow DOMs, variable fonts, dynamic loading.
+
+[![Respect My Eyes running on developers.google.com](preview.png)](preview.png)
+
+## Why
+
+- **One setting for the whole web.** Fonts come from `chrome://settings/fonts` and follow it live. Nothing to configure per site.
+- **Works on hard sites.** Variable fonts, shadow DOM, CDN-hosted stylesheets, CSS variables and fonts loaded by scripts are all handled.
+- **Icons stay icons.** Icon fonts (Font Awesome, Material Symbols, emoji...) are detected and never replaced.
+- **Code editors keep their cursor.** Monaco, CodeMirror, Ace and xterm.js are recognised on their own, so the cursor and selection stay aligned with the text.
+- **Fix a site in two clicks.** The toolbar popup lists fonts it could not classify; pick a category and press Add.
+- **Easy to correct.** Every destructive action in settings has an Undo, and settings can be exported and imported.
+- **Private.** No network requests, no analytics. Everything stays in your browser.
 
 ## Install
 
-1. Open `chrome://extensions` and enable **Developer mode**.
+1. Open `chrome://extensions` and turn on **Developer mode**.
 2. Click **Load unpacked** and select the `dist` folder.
 
-Works in Chromium-based browsers. Browsers that don't implement `chrome.fontSettings` use fallback fonts (see below).
+Needs a Chromium-based browser, version 118 or newer. Browsers that do not expose their font settings to extensions use Arial, Georgia and Courier New until you pick fonts under *Settings > Fonts*.
 
-## Browser Font Preferences
+## Usage
 
-- Automatically reads serif, sans-serif, fixed-width font families and fixed-width font size from browser settings (`chrome://settings/fonts`).
-- No need to configure fonts separately for individual websites.
-- Font preferences are cached in the background and applied to open tabs when browser settings change.
-- Includes fallback fonts (Arial, Georgia, Courier New) for browsers that don't expose font preferences to extensions.
-- Allows overriding individual font families with custom installed fonts.
+**Toolbar popup**
 
-## Custom Font Support
+| Section | What it does |
+| --- | --- |
+| Site switch | Turns the extension off for the current site. Hidden where it makes no sense (browser pages, web stores). |
+| Fonts | The fonts in use. Click to change them in settings. |
+| Needs your input | Fonts on this page that could not be classified. Choose Sans, Serif, Mono or Icon, then Add. |
+| Code editors | Editors found on the page, with a switch to stop protecting them on this site. |
 
-- **Popup:** shows the site switch, the fonts in use, the unrecognized fonts of the page (pick Sans / Serif / Mono / Icon and press Add), and the code editors found on the page, named by element, with a switch for each. Changes apply immediately.
-- **Settings page:** sticky section navigation, a live preview of the chosen fonts, and an editable list of additional fonts with filter and sorting. **Import list** opens a dialog with a live preview of what will be added, changed or ignored; the old `Name|SANS-SERIF` format still works.
-- Destructive actions (remove, restore defaults, import, reset) apply instantly and show an **Undo** toast instead of a confirmation dialog.
-- Configure monospace font size and scaling.
-- Exclude specific websites.
-- Add custom icon font keywords.
-- Import, export, and reset configuration.
+**Settings** (right-click the icon, *Options*)
 
-## Dynamic Font Detection
-
-Font names are collected from three independent sources, so fonts are found regardless of how a site declares them:
-
-- **Stylesheets:** walked directly through the CSSOM, including `@media`, `@supports`, `@layer`, `@import` and font stacks stored in CSS custom properties.
-- **Computed styles:** `getComputedStyle()` is used to inspect fonts actually applied to page elements. This covers `var(--font-family)`, inline styles, open shadow DOM and stylesheets blocked by CORS. Elements are processed incrementally in batches of 250 and grouped by tag, class and inline style to avoid redundant work.
-- **`document.fonts`:** lists every font face the page declares, even from stylesheets that cannot be read, and includes fonts created in JavaScript.
-
-Each family name is classified individually (icon / sans-serif / serif / monospace). Names without a recognizable keyword inherit the category of the stack's generic fallback, so `"Foo", sans-serif` is treated as sans-serif.
-
-## Variable and Multi-Weight Fonts
-
-Replacements are applied through `@font-face` overrides using `local()` fonts. If a page's own `@font-face` cannot be removed (its stylesheet is blocked by CORS), the browser merges faces with identical descriptors and the one declared later wins. For that reason, the descriptors the page declares (for example `font-weight: 1 1000` or `font-stretch: 25% 151%`) are read from `document.fonts` and copied into the override rules. This is what makes variable fonts such as Google Sans Flex replaceable.
-
-## Performance and Compatibility
-
-- Removed the bundled 80 KB CSS parser; the page scripts total about 41 KB.
-- Only 4 static `@font-face` rules per font (regular, bold, italic, bold italic) instead of 20; other weights and ranges are generated only when a page actually declares them.
-- Incremental stylesheet scanning detects new rules and dynamically injected styles; unchanged pages cost nothing.
-- Improved font-family classification handles individual names correctly and avoids accidental partial matches.
-- Migrated to **Manifest V3** for compatibility with current Chromium-based browsers.
-- Uses dedicated constructed stylesheets as an override layer instead of modifying websites' original CSS rules (the page's own `@font-face` rules are removed only for families that are being replaced).
-
-## Code Editors and Text Boxes
-
-Editors (Monaco, CodeMirror, Ace, xterm) and rich text boxes measure the width of a character themselves, or mirror their text into a second element, and use that to place the cursor and selection. Changing their font or size behind their back makes the cursor drift away from the text. To avoid that:
-
-- Our forced monospace size and letter-spacing never reach inside protected containers (done with `@scope (:root) to (...)`, Chrome 118+). The container list is editable in settings. Defaults: `.monaco-editor`, `.cm-editor`, `.CodeMirror`, `.ace_editor`, `.xterm`, `[contenteditable]`.
-- `<textarea>` is **not** forced to monospace any more (opt-in switch in settings); many sites, Google Search AI mode among them, mirror their text boxes.
-- Monospace fonts are replaced from the very first paint, before any page script runs, so an editor measures your font from the start. This covers every monospace font in *Extra fonts* plus an editable list of well-known names (Consolas, Menlo, JetBrains Mono...).
-- **Self-learning.** A monospace font that an editor was already using when we discovered it is not swapped under it (it measured and cached the old one). It is remembered automatically (can be switched off), so after one reload it is applied from the first paint like the rest of your list. The popup shows these fonts.
-- If an editor keeps the site's configured size, set *Scaling* to *None* in the monospace settings.
+- **Fonts:** follow the browser or pick any installed font per family, with a live preview.
+- **Monospace:** font size and scaling, and whether text boxes use the monospace font.
+- **Extra fonts:** your own list of font names and their category. Filter, add, or paste a whole list with *Import list*.
+- **Excluded sites**, **icon font keywords**, **backup**.
 
 ## Troubleshooting
 
-If some text still uses an unexpected font:
+**Some text still uses the site's font.**
+Open the popup on that page. If the font is listed under *Needs your input*, add it as Sans, Serif or Mono. Fonts with no generic fallback (`font-family: BrandFace;` with no `sans-serif` after it) are the usual cause.
 
-1. Open the extension popup on the affected website.
-2. Check the list of unrecognized fonts.
-3. Add the missing font and assign it to the appropriate category.
-4. For icon fonts, select **Icon font** to prevent them from being overridden.
+**Icons turned into letters or boxes.**
+Open the popup, find the icon font, choose **Icon**, and reload the page. For a recurring pattern, add a word from its name under *Icon font keywords*.
 
-If the cursor of an editor or text box is misplaced, see *Code Editors and Text Boxes* above: add the element's root selector to the protected list.
+**The cursor is in the wrong place in an editor or text box.**
+- Switch editor protection off and on again for the site in the popup, or reload the page.
+- Set *Monospace > Scaling* to *None* if the editor should keep exactly the size the site configured.
+- Keep *Monospace > Text boxes* off (the default): many sites mirror their text boxes.
+- An editor that is not detected can be added under *Monospace > Advanced* with a CSS selector of its root element.
 
-Changes are applied dynamically, without requiring a browser restart. Re-enabling a site or un-hiding an icon font may need a page reload.
+**An editor still shows the site's font the first time.**
+The editor had already measured its font, so it is left alone and remembered. Reload the page and it uses your font from the first paint.
 
-Known limitations: fonts used only in `::before` / `::after` pseudo-elements or closed shadow roots are not inspected directly, `system-ui` is handled with selector rules because `@font-face` cannot replace it, and a font registered by a site's JavaScript after the overrides were generated may win until the next rescan.
+**The page looks wrong.**
+Turn the extension off for that site with the popup's site switch, or add the site under *Excluded sites*.
 
-## Storage
+**Fonts do not follow my browser settings.**
+Your browser may not expose them to extensions. Press *Re-read* under *Settings > Fonts*, or choose *Custom* and type the font name.
 
-Everything is stored in `chrome.storage.local`:
+**Nothing happens on a page.**
+Extensions cannot run on browser pages or web stores. A tab that was already open when the extension was installed needs a reload.
 
-| Key | Content |
-| --- | --- |
-| `rmeSettings` | user settings |
-| `rmeBrowserFonts` | cache of the browser's font preferences |
+**A change did not apply.**
+Most changes apply instantly. Bringing back an icon font or re-enabling a site may need a reload.
 
-Settings from older builds (`settings`, `browserFonts`) are migrated automatically on update.
+## Limitations
 
-## Development Notes
+- Fonts used only in `::before` / `::after` or in closed shadow roots are not inspected directly.
+- `system-ui` cannot be replaced by font substitution, so it is handled with style rules.
+- A font that a site registers with JavaScript late may win until the next rescan.
 
-- Removed the optional `getRemoteCss` feature, which relied on blocking requests on the page's main thread and was disabled by default.
-- The additional font list and the dynamic detection above replace it for cross-origin stylesheets.
-- Shared logic (classification, settings, CSS generation) lives in `dist/common.js` without DOM or `chrome.*` dependencies, which keeps it unit-testable.
-- Tests: `node tests/common.test.js`, `node tests/background.test.js`, `node tests/ui.test.js`, and `npm i jsdom && node tests/content.test.js` (the last two run the real content script against a simulated CSSOM, so verify changes in a real browser too).
+## Development
+
+There is no build step: load `dist` as an unpacked extension. The tests run the real scripts against a simulated DOM, so check changes in a real browser too.
+
+```
+node tests/common.test.js
+node tests/background.test.js
+npm i jsdom
+node tests/content.test.js
+node tests/ui.test.js
+```
+
+How it works, the research behind editor detection and the trade-offs are in [`DESIGN.md`](DESIGN.md).
