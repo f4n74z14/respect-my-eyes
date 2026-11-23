@@ -76,28 +76,24 @@ if (chrome.fontSettings) {
     }
 }
 
-// Editors reveal monospace fonts late; remember them so the next load applies them from the first paint.
+// Editors reveal monospace fonts late; remember them for that site so its next load applies them from the first paint.
 // Serialized, because several frames can report at once and storage has no atomic read-modify-write.
 let learnChain = Promise.resolve();
 
-function learn(names) {
+function learn(host, names) {
     learnChain = learnChain.then(async () => {
-        const { settings } = await F.storage.load();
-        const known = new Set(settings.manualFonts.map(f => F.norm(f.name)));
-        const fresh = F.cleanNameList(names.slice(0, 20)).filter(n => !known.has(F.norm(n)));
+        const stored = (await chrome.storage.local.get(F.KEYS.hints))[F.KEYS.hints];
+        const next = F.addHints(stored, host, names.slice(0, 20));
 
-        if (!fresh.length) return;
-
-        settings.manualFonts = F.cleanManual([...settings.manualFonts, ...fresh.map(name => ({ name, category: "mono" }))]);
-        await F.storage.save(settings);
+        if (next) await chrome.storage.local.set({ [F.KEYS.hints]: next });
     }).catch(() => { /* keep the chain alive */ });
 
     return learnChain;
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-    if (msg && msg.type === "rme:learn" && Array.isArray(msg.names)) {
-        learn(msg.names).then(() => reply(true));
+    if (msg && msg.type === "rme:learn" && typeof msg.host === "string" && Array.isArray(msg.names)) {
+        learn(msg.host, msg.names).then(() => reply(true));
         return true;
     }
     if (msg && msg.type === "rme:refresh") {

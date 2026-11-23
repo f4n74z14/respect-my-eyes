@@ -23,7 +23,6 @@ h1 { margin-bottom: 6px; }
 .preview .tag { display: inline-block; width: 80px; font: 11px system-ui, sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 
 details.adv > summary { font-weight: 550; color: var(--fg); }
-details.setting { display: block; }
 .toolbar { display: flex; align-items: center; gap: 12px; margin: 14px 0 10px; }
 .toolbar .grow { flex: 1; min-width: 0; }
 .toolbar input[type=search] { max-width: 220px; }
@@ -35,6 +34,5 @@ details.setting { display: block; }
 details.adv.spaced { margin-top: 14px; }
 details.adv > .hint { margin-top: 8px; }
 details.adv > textarea { margin-top: 8px; }
-details.adv > .title { margin-top: 10px; }
 .dlg-cat { margin: 12px 0 8px; }
 #impPreview { max-height: 190px; }

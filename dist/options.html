@@ -11,7 +11,7 @@
 <div class="topbar"><div class="topbar-in">
     <div class="brand"><img src="icon-32.png" alt=""><strong>Respect My Eyes</strong></div>
     <nav id="nav" aria-label="Sections">
-        <a href="#general">General</a><a href="#fonts">Fonts</a><a href="#monospace">Monospace</a><a href="#extra">Extra fonts</a><a href="#backup">Backup</a>
+        <a href="#general">General</a><a href="#fonts">Fonts</a><a href="#monospace">Monospace</a><a href="#protect">Protection</a><a href="#extra">Extra fonts</a><a href="#backup">Backup</a>
     </nav>
     <span id="saved" role="status" aria-live="polite">Saved</span>
 </div></div>
@@ -73,17 +73,22 @@
                 <div class="text"><div class="title">Text boxes</div><div class="hint">Use the monospace font in &lt;textarea&gt;. Can misplace the cursor on sites that mirror their text boxes.</div></div>
                 <label class="switch"><input type="checkbox" id="textarea" aria-label="Monospace in text boxes"><span></span></label>
             </div>
+        </div>
+    </section>
+
+    <section id="protect">
+        <h2>Protected areas</h2>
+        <div class="card">
             <div class="setting">
                 <div class="text"><div class="title">Code editors</div><div class="hint">Found automatically. Their font size and spacing are never forced, and the font they already use is not swapped under them.</div></div>
                 <label class="switch"><input type="checkbox" id="edProtect" aria-label="Protect code editors"><span></span></label>
             </div>
-            <details class="setting stack adv">
-                <summary>Protected areas</summary>
-                <div class="title">Elements to leave alone</div>
-                <div class="hint">Our style rules never apply inside these elements. One CSS selector per line, e.g. <code>.mce-container</code>. In DevTools: right-click the element, Copy, Copy selector. Use it for an editor that is not detected, or a widget that looks wrong.</div>
-                <textarea id="edSelectors" rows="3" spellcheck="false" placeholder=".mce-container&#10;#my-editor" aria-label="Elements to leave alone"></textarea>
+            <div class="setting stack">
+                <div class="title">Other elements</div>
+                <div class="hint">Our style rules never apply inside these. One CSS selector per line, e.g. <code>.mce-container</code>. In DevTools: right-click the element, Copy, Copy selector. For an editor that is not detected, or a widget that looks wrong.</div>
+                <textarea id="edSelectors" rows="3" spellcheck="false" placeholder=".mce-container&#10;#my-editor" aria-label="Protected elements"></textarea>
                 <div class="hint warn" id="selHint" role="alert"></div>
-            </details>
+            </div>
         </div>
     </section>
 

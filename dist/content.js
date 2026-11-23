@@ -3,9 +3,11 @@
  *
  * Forces the fonts configured in the browser (chrome://settings/fonts) onto every page without breaking icon fonts.
  *
- *   base sheet  (document_start)   manual fonts + monospace defaults, so the first paint is already right
+ *   base sheet  (document_start)   monospace defaults and the editor fonts learned for this site: the only fonts that
+ *                                  must be in place before the page's scripts run
  *   site sheet  (DOM ready, load,  built from what the page uses: stylesheets, computed styles, document.fonts.
  *                new stylesheets)  Names are overridden with @font-face local(), selectors with !important rules.
+ *                                  A font from the user's list costs nothing until the page actually uses it.
  *
  * Both sheets are constructed stylesheets: exempt from the page's CSP and cheap to replace.
  */
@@ -286,11 +288,7 @@
     function buildBaseCss() {
         const out = [];
 
-        for (const f of cfg.settings.manualFonts) {
-            const k = norm(f.name);
-            if (isCat(f.category) && !cfg.chosenLower.has(k) && !lateNames.has(k)) out.push(faceCss(f.name, f.category));
-        }
-        for (const name of cfg.seedNames) out.push(faceCss(name, "mono"));
+        for (const name of cfg.hintNames) out.push(faceCss(name, "mono"));
 
         out.push(wrap(F.monoDefaultsCss(cfg)));
 
@@ -394,7 +392,7 @@
         const names = [...learnQueue];
         learnQueue.clear();
 
-        try { Promise.resolve(chrome.runtime.sendMessage({ type: "rme:learn", names })).catch(() => {}); }
+        try { Promise.resolve(chrome.runtime.sendMessage({ type: "rme:learn", host: location.hostname, names })).catch(() => {}); }
         catch { /* extension was reloaded: this script is orphaned */ }
     }
 
@@ -486,7 +484,7 @@
         else start();
 
         document.addEventListener("animationstart", onEditorSeen, true);
-        document.addEventListener("load", e => { if (e.target && e.target.nodeName === "LINK") schedule(50); }, true);   // its rules are readable now
+        document.addEventListener("load", e => { if (e.target && e.target.nodeName === "LINK") schedule(0); }, true);    // its rules are readable now
         if (document.fonts) document.fonts.addEventListener("loadingdone", () => schedule(50));
         window.addEventListener("load", () => { schedule(50); setTimeout(() => schedule(0), 500); });
     }
@@ -515,7 +513,7 @@
         attach();
     }
 
-    function configure(settings, bf) {
+    function configure(settings, bf, hints) {
         st = freshState();
 
         if (!settings.enabled) return turnOff("disabled");
@@ -523,19 +521,15 @@
 
         const { fonts, monoSize, monoScale } = F.resolveFonts(settings, bf);
         const chosenLower = new Set(CATS.map(c => norm(fonts[c].name)));
-        const listed = new Set(settings.manualFonts.map(f => norm(f.name)));
-        const seedNames = F.MONO_SEED.filter(n => !listed.has(norm(n)) && !chosenLower.has(norm(n)) && !lateNames.has(norm(n)));
+        const hintNames = F.cleanNameList(hints[location.hostname]).filter(n => !chosenLower.has(norm(n)) && !lateNames.has(norm(n)));
 
         cfg = {
-            settings, fonts, monoSize, monoScale, chosenLower, seedNames,
+            settings, fonts, monoSize, monoScale, chosenLower, hintNames,
             matchers: F.buildMatchers(settings),
             protectSel: editorSelector(settings.editors),
             editorsOffSite: matchesHosts(settings.editors.offSites),
             // everything declared in the base sheet, i.e. in place before any page script runs
-            preFaces: new Set([
-                ...settings.manualFonts.filter(f => isCat(f.category) && !lateNames.has(norm(f.name))).map(f => norm(f.name)),
-                ...seedNames.map(norm)
-            ])
+            preFaces: new Set(hintNames.map(norm))
         };
 
         baseSink.set(buildBaseCss());
@@ -545,7 +539,7 @@
         if (document.readyState !== "loading") schedule(0);
     }
 
-    const load = () => F.storage.load().then(({ settings, bf }) => configure(settings, bf)).catch(() => { /* orphaned */ });
+    const load = () => F.storage.load().then(({ settings, bf, hints }) => configure(settings, bf, hints)).catch(() => { /* orphaned */ });
 
     // ---------------------------------------------------------------------------------------------------------------
     // Report for the popup

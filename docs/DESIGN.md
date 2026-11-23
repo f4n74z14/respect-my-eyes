@@ -14,7 +14,7 @@ What the extension does, how, and what each decision costs. Behaviour is covered
 | `dist/popup.*`, `dist/options.*` | Popup and settings page. |
 | `dist/ui.css` | Shared styles (Nord palette, light and dark). Page-specific styles are in `popup.css` and `options.css`. |
 
-Storage (`chrome.storage.local`): `rmeSettings` (user settings) and `rmeBrowserFonts` (cache of the browser's font preferences, written by the service worker). Keys from older builds (`settings`, `browserFonts`) are migrated on update.
+Storage (`chrome.storage.local`): `rmeSettings` (user settings), `rmeBrowserFonts` (cache of the browser's font preferences, written by the service worker) and `rmeHints` (monospace fonts that editors used, per site). Keys from older builds (`settings`, `browserFonts`) are migrated on update.
 
 ## Reading the browser's fonts
 
@@ -52,17 +52,18 @@ Editors measure the width of a character and cache it, then place the cursor fro
 **Protection.**
 - Forced monospace size and letter-spacing never reach inside the boundary (`@scope (:root) to (...)`).
 - A monospace font an editor was already using is not swapped under it. It is remembered (service worker, serialized) so the next load applies it from the first paint.
-- Monospace names in the user's list, plus a built-in list of well-known names, are in the base sheet and therefore replaced before any page script runs.
+- The fonts a site's editor used are stored as a **hint for that site** (at most 300 sites, 12 names each, oldest dropped first). They are in the base sheet and therefore replaced before any page script runs, on that site only.
 - A per-site switch and a *Protected areas* field (any selector; all selector-based rules stay out of it) cover misdetection and widgets that look wrong.
 
 ## Performance
 
 - No bundled CSS parser. The CSSOM is read directly.
+- **The font list is free until used.** A listed font is declared only when the page uses it (found by the sources above), so the cost per tab depends on the page, not on the list. The base sheet holds only the site's hints and a few fixed rules.
 - Sheets are scanned incrementally; a page with nothing new does no work.
 - Generated `@font-face` rules are cached per family and category; the CSS is rebuilt only when something new was found.
 - `document.fonts` is re-read only when its size changed.
 - Sampling is chunked and de-duplicated, so it never blocks the page.
-- Page scripts (`common.js` + `content.js`) are about 51 KB.
+- Page scripts (`common.js` + `content.js`) are about 53 KB.
 
 ## Trade-offs
 
@@ -73,8 +74,8 @@ Editors measure the width of a character and cache it, then place the cursor fro
 | Copy descriptors from `document.fonts` | Beats unremovable page faces, including variable fonts | A split regular/bold range is approximated with two extra rules |
 | Constructed stylesheets | Immune to page CSP, cheap to update | A page that reassigns `adoptedStyleSheets` can drop them until the next rescan |
 | Hidden-input detection of editors | No class lists, works for new editors | The boundary includes two ancestors of the hidden input, so a few unrelated code blocks next to a search box lose forced sizing |
-| Do not swap an editor's font late | Cursor stays correct | First visit shows the site's font in that editor |
-| Learn editor fonts automatically | Fixed after one reload, no setup | The user's list grows on its own (visible and editable) |
+| Learn editor fonts per site | Fixed after one reload, no setup, the user's list is not touched | Hints are invisible; the first visit to a site shows the site's font in its editor |
+| Declare listed fonts on demand | Cost independent of the list length | A listed font is replaced at the first scan (as soon as a stylesheet loads), not at `document_start` |
 | `@scope` and `:has()` for protection | Pure CSS, no DOM changes | Needs Chromium 118+ |
 | Text boxes are not forced to monospace | No drift on mirrored text boxes | Users who want it must switch it on |
 | Four static faces per family | Small CSS | Other weights rely on the browser's nearest match unless the page declares them |

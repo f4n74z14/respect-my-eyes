@@ -21,6 +21,7 @@ const PAGE_CSS = `
   .plain { font-family: sans-serif; }
   .sys { font-family: system-ui, sans-serif; }
   .serifish { font-family: Georgia, "Times New Roman", serif; }
+  .wh { font-family: Whitney; }
   .mce-container, .mce-container * { font-family: Arial, sans-serif; }
   .mce-ico { font-family: 'tinymce', Arial; }
   .sweep *, .sys { font-family: system-ui, sans-serif; }
@@ -29,9 +30,9 @@ const PAGE_CSS = `
   @page { font-family: Arial; }
 `;
 
-function setup({ settings, bf, fonts = [], editor = false, host = "https://site.test/" }) {
+function setup({ settings, bf, hints, fonts = [], editor = false, host = "https://site.test/" }) {
   const dom = new JSDOM(`<!doctype html><html><head><style id="s">${PAGE_CSS}</style></head><body>
-      <h1>t</h1><div id="inl" style="font-family: Quuxface, serif">q</div><i class="fa"></i><code class="hl">x</code><p class="brandy">b</p><p class="plain">p</p><p class="wide">w</p></body></html>`,
+      <h1>t</h1><div id="inl" style="font-family: Quuxface, serif">q</div><i class="fa"></i><code class="hl">x</code><p class="brandy">b</p><p class="plain">p</p><p class="wh">w</p><p class="wide">w</p></body></html>`,
     { url: host, runScripts: "outside-only", pretendToBeVisual: true });
   const w = dom.window;
   w.self = w;
@@ -58,7 +59,7 @@ function setup({ settings, bf, fonts = [], editor = false, host = "https://site.
   w.chrome = {
     runtime: { lastError: null, onMessage: { addListener: fn => (w.__onMessage = fn) }, sendMessage: (m, cb) => { w.__sent.push(m); cb && cb(); } },
     storage: {
-      local: { get: () => Promise.resolve({ rmeSettings: store.settings, rmeBrowserFonts: store.browserFonts }) },
+      local: { get: () => Promise.resolve({ rmeSettings: store.settings, rmeBrowserFonts: store.browserFonts, rmeHints: hints }) },
       onChanged: { addListener: fn => listeners.push(fn) }
     }
   };
@@ -95,7 +96,9 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   await wait(400);
   const [base, site] = env.sheets();
 
-  assert.ok(base.includes('font-family:"Whitney"') && base.includes('local("Verdana")'), "manual faces use browser sans font");
+  assert.ok(!base.includes('"Whitney"') && !base.includes('"Poppins"'), "the font list is NOT put into the base sheet");
+  assert.ok(site.includes('@font-face{font-family:"Whitney"') && site.includes('local("Verdana")'), "a listed font the page uses is replaced, with the browser sans font");
+  assert.ok(!site.includes('"Poppins"') && !site.includes('"Open Sans Condensed"') && !site.includes('"Google Sans"'), "listed fonts the page does not use cost nothing");
   assert.ok(base.includes('pre,code,kbd,samp,pre *,code *{font-family:"Consolas", monospace!important;font-size:13px!important'), "mono defaults from browser, textarea no longer forced");
 
   assert.ok(site.includes('font-family:"Segoe UI"') && site.includes('local("Verdana")'), "page names overridden");
@@ -138,13 +141,14 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   env.store.settings = s;
   env.listeners.forEach(fn => fn({ rmeSettings: {} }, "local"));
   await wait(200);
-  assert.ok(env.sheets()[0].includes('font-family:"Brand Face"') && env.sheets()[0].includes('local("Georgia")'), "manual font applied live");
+  assert.ok(env.sheets()[1].includes('@font-face{font-family:"Brand Face"') && env.sheets()[1].includes('local("Georgia")'), "font added to the list is applied live, because the page uses it");
+  assert.ok(!env.sheets()[0].includes('"Brand Face"'), "without touching the base sheet");
 
   // --- 4. custom font beats browser, generic-only stacks are forced then --------------------------------------------
   env = setup({ settings: { fonts: { sans: { mode: "custom", custom: "Inter" } }, mono: { sizeMode: "custom", customSize: 15, scaleMode: "off" } }, bf: BF });
   await wait(400);
   const [b2, s2] = env.sheets();
-  assert.ok(b2.includes('local("Inter")'), "custom sans used");
+  assert.ok(s2.includes('local("Inter")'), "custom sans used for the families the page uses");
   assert.ok(/\.plain[^{]*\{font-family:"Inter", sans-serif!important/.test(s2), "generic-only stack forced when custom font set");
   assert.ok(b2.includes("font-size:15px") && !s2.includes("size-adjust"), "custom mono size, scaling off");
 
@@ -162,7 +166,7 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   // --- 6. API unavailable falls back to original defaults ------------------------------------------------------------
   env = setup({ settings: undefined, bf: undefined });
   await wait(400);
-  assert.ok(env.sheets()[0].includes('local("Arial")'), "fallback sans = Arial");
+  assert.ok(env.sheets()[1].includes('local("Arial")'), "fallback sans = Arial");
 
   // --- 7. stylesheet added after load is picked up --------------------------------------------------------------------
   env = setup({ settings: undefined, bf: BF });
@@ -182,22 +186,31 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.ok(/@scope[^{]*\.monaco-editor,\.cm-editor,\.CodeMirror,\.ace_editor,\.xterm\)\{pre,code/.test(b8), "mono defaults are scoped away from editors");
   assert.ok(/@scope[^{]*\{code\.hl[^}]*font-size:13px/.test(s8), "page-derived mono rules are scoped away from editors too");
   assert.ok(b8.includes("@keyframes rme-seen") && b8.includes(PROXY + "{animation:rme-seen .001s}"), "detector for editors that appear later");
-  assert.ok(b8.includes('font-family:"JetBrains Mono"') && b8.includes('font-family:"Menlo"'), "well-known monospace names applied from the first paint");
-  assert.ok(!b8.includes('@font-face{font-family:"Consolas"'), "chosen font itself is not seeded");
+  assert.ok(!b8.includes('@font-face'), "nothing is declared up front for a site without hints");
+  assert.ok(!b8.includes('@font-face{font-family:"Consolas"'), "the chosen font itself needs no rule");
   assert.ok(!s8.includes('"Editor Only Mono"'), "late monospace font found inside an editor is NOT swapped under it");
   env.w.__onMessage({ type: "rme:report" }, {}, r => (resp = r));
   assert.strictEqual(JSON.stringify(resp.editors), '[{"sample":"div.monaco-editor","count":1}]', "report names the editor element");
   assert.strictEqual(resp.protect, true);
   assert.strictEqual(JSON.stringify(resp.deferred), '["Editor Only Mono"]');
-  assert.strictEqual(JSON.stringify(env.w.__sent), '[{"type":"rme:learn","names":["Editor Only Mono"]}]', "late editor font is reported for learning");
+  assert.strictEqual(JSON.stringify(env.w.__sent), '[{"type":"rme:learn","host":"site.test","names":["Editor Only Mono"]}]', "late editor font is reported for learning, with its site");
 
-  // the learned font lands in the settings while this page is still open: it must NOT be swapped under the editor now
-  const learned = JSON.parse(JSON.stringify(env.store.settings || {}));
-  learned.manualFonts = [{ name: "Editor Only Mono", category: "mono" }];
-  env.store.settings = learned;
+  // changing settings while the editor is open must not swap the font under it either
   env.listeners.forEach(fn => fn({ rmeSettings: {} }, "local"));
   await wait(300);
-  assert.ok(!env.sheets()[0].includes('"Editor Only Mono"') && !env.sheets()[1].includes('"Editor Only Mono"'), "learned font waits for the next page load");
+  assert.ok(!env.sheets()[0].includes('"Editor Only Mono"') && !env.sheets()[1].includes('"Editor Only Mono"'), "still left alone for the rest of this page's life");
+
+  // next visit: the site's hint puts the editor's font into the base sheet, before any page script runs
+  env = setup({ settings: undefined, bf: BF, hints: { "site.test": ["Editor Only Mono", "Consolas"] }, editor: true });
+  await wait(500);
+  assert.ok(env.sheets()[0].includes('@font-face{font-family:"Editor Only Mono"') && env.sheets()[0].includes('local("Consolas")'), "hinted font is applied from the first paint");
+  assert.ok(!env.sheets()[0].includes('@font-face{font-family:"Consolas"'), "the chosen font itself needs no rule");
+  env.w.__onMessage({ type: "rme:report" }, {}, r => (resp = r));
+  assert.strictEqual(resp.deferred.length, 0, "so nothing is left over for the editor");
+  assert.strictEqual(env.w.__sent.length, 0, "and nothing is learned twice");
+  env = setup({ settings: undefined, bf: BF, hints: { "other.test": ["Editor Only Mono"] }, editor: true });
+  await wait(400);
+  assert.ok(!env.sheets()[0].includes('"Editor Only Mono"'), "hints are per site");
 
   // an editor with NO known class that mounts after load: its hidden input announces it
   env = setup({ settings: undefined, bf: BF, editor: true });
@@ -218,10 +231,13 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   await wait(300);
   assert.ok(env.sheets()[0].includes("code *,textarea{"), "textarea forcing is opt-in");
 
-  // user adds it -> it is part of the base sheet next time
-  env = setup({ settings: { manualFonts: [{ name: "Editor Only Mono", category: "mono" }] }, bf: BF, editor: true });
-  await wait(500);
-  assert.ok(env.sheets()[0].includes('font-family:"Editor Only Mono"'), "manual mono font applied from the first paint");
+  // the base sheet does not grow with the font list: 20 listed fonts or 520, the same
+  const many = n => ({ manualFonts: Array.from({ length: n }, (_, i) => ({ name: `Listed Font ${i}`, category: i % 2 ? "mono" : "sans" })) });
+  const small = setup({ settings: many(20), bf: BF });
+  const large = setup({ settings: many(500), bf: BF });
+  await wait(400);
+  assert.strictEqual(small.sheets()[0], large.sheets()[0], "base sheet is independent of the list size");
+  assert.strictEqual(small.sheets()[1], large.sheets()[1], "and so is the site sheet, as long as the page does not use them");
 
   // protection switched off for this site, and globally
   env = setup({ settings: { version: 4, editors: { offSites: ["site.test"] } }, bf: BF, editor: true });

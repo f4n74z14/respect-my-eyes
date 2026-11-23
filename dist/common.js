@@ -8,7 +8,7 @@
     "use strict";
 
     // chrome.storage.local keys (v1 used the unprefixed names, background.js migrates them)
-    const KEYS = { settings: "rmeSettings", fonts: "rmeBrowserFonts", legacy: ["settings", "browserFonts"] };
+    const KEYS = { settings: "rmeSettings", fonts: "rmeBrowserFonts", hints: "rmeHints", legacy: ["settings", "browserFonts"] };
 
     const CATS = ["sans", "serif", "mono"];
     const MANUAL_CATS = ["sans", "serif", "mono", "ignore"];
@@ -42,15 +42,6 @@
         ["Motiva Sans", "sans"],            // store.steampowered.com
         ["Poppins", "sans"]                 // fantasypros.com
     ].map(function (f) { return { name: f[0], category: f[1] }; });
-
-    // Names code editors ask for by default. Applying them before the page's scripts run means an editor measures
-    // our font from the start, instead of measuring the site's font and being surprised later.
-    const MONO_SEED = [
-        "Consolas", "Courier New", "Courier", "Menlo", "Monaco", "Droid Sans Mono", "DejaVu Sans Mono", "Liberation Mono",
-        "Lucida Console", "SF Mono", "SFMono-Regular", "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Fira Code",
-        "Fira Mono", "Source Code Pro", "Roboto Mono", "Ubuntu Mono", "IBM Plex Mono", "Inconsolata", "Hack",
-        "Noto Sans Mono", "Andale Mono"
-    ];
 
     const DEFAULT_SETTINGS = {
         version: 4,
@@ -528,11 +519,36 @@
         return monoRule(sel, cfg);
     }
 
+    /*
+     * Site hints: which monospace fonts a site's code editor used. They are replaced from the first paint on that
+     * site only, so the cost of a font list never depends on how long it is. Oldest sites are dropped first.
+     *
+     * @return the updated hints, or null when nothing changed
+     */
+    const HINT_LIMITS = { hosts: 300, names: 12 };
+
+    function addHints(hints, host, names) {
+        host = cleanHostList([host])[0];
+        if (!host) return null;
+
+        const current = hints && hints[host] || [];
+        const merged = cleanNameList([...current, ...names]).slice(0, HINT_LIMITS.names);
+
+        if (merged.length === current.length) return null;
+
+        const next = { ...hints };
+        delete next[host];                      // re-insert last: object keys keep insertion order
+        next[host] = merged;
+
+        for (const old of Object.keys(next).slice(0, Math.max(0, Object.keys(next).length - HINT_LIMITS.hosts))) delete next[old];
+        return next;
+    }
+
     // chrome.storage.local access shared by the content script, service worker, popup and options page
     const storage = {
         async load() {
-            const data = await chrome.storage.local.get([KEYS.settings, KEYS.fonts]);
-            return { settings: normalizeSettings(data[KEYS.settings]), bf: data[KEYS.fonts] || null };
+            const data = await chrome.storage.local.get([KEYS.settings, KEYS.fonts, KEYS.hints]);
+            return { settings: normalizeSettings(data[KEYS.settings]), bf: data[KEYS.fonts] || null, hints: data[KEYS.hints] || {} };
         },
         save(settings) { return chrome.storage.local.set({ [KEYS.settings]: settings }); },
         // fn(changes) runs when the settings or the cached browser fonts changed
@@ -545,10 +561,10 @@
 
     root.RME = {
         // data
-        KEYS, CATS, MANUAL_CATS, CAT_LABEL, MONO_SEED, DEFAULT_SETTINGS, EDITOR_PROXY, EDITOR_ROOTS,
+        KEYS, CATS, MANUAL_CATS, CAT_LABEL, DEFAULT_SETTINGS, EDITOR_PROXY, EDITOR_ROOTS,
         // settings
         normalizeSettings, resolveFonts, storage, isExcluded,
-        cleanFontName, cleanHostList, cleanSelectors, cleanNameList, cleanManual, parseFontLines,
+        addHints, HINT_LIMITS, cleanFontName, cleanHostList, cleanSelectors, cleanNameList, cleanManual, parseFontLines,
         // font names
         norm, cssQuote, buildMatchers, classifyName, splitFamilies, analyzeStack, looksLikeFontStack,
         // css

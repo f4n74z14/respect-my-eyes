@@ -135,6 +135,26 @@ t("selector sweeps are dropped", () => {
     assert.strictEqual(F.dropSweeps(".only *"), "");
 });
 
+t("site hints", () => {
+    let h = F.addHints({}, "Site.Test", ["Fira Code", "fira code", "Menlo", 'Bad"Name']);
+    assert.deepStrictEqual(h, { "site.test": ["Fira Code", "Menlo", "BadName"] }, "cleaned and de-duplicated");
+    assert.strictEqual(F.addHints(h, "site.test", ["menlo"]), null, "nothing new, nothing to write");
+    assert.strictEqual(F.addHints(h, "", ["X"]), null);
+    assert.strictEqual(F.addHints(h, "https://", ["X"]), null, "no usable host");
+
+    h = F.addHints(h, "b.test", ["X"]);
+    h = F.addHints(h, "site.test", ["Hack"]);
+    assert.deepStrictEqual(Object.keys(h), ["b.test", "site.test"], "a refreshed site moves to the end");
+
+    const names = Array.from({ length: 30 }, (_, i) => `Mono ${i}`);
+    assert.strictEqual(F.addHints({}, "c.test", names)["c.test"].length, F.HINT_LIMITS.names, "names per site are capped");
+
+    let many = {};
+    for (let i = 0; i < F.HINT_LIMITS.hosts + 5; i++) many = F.addHints(many, `h${i}.test`, ["X"]);
+    assert.strictEqual(Object.keys(many).length, F.HINT_LIMITS.hosts, "sites are capped");
+    assert.ok(!("h0.test" in many) && "h304.test" in many, "oldest sites go first");
+});
+
 t("exclusion matching", () => {
     assert.ok(F.isExcluded("www.example.com", ["example.com"]));
     assert.ok(F.isExcluded("example.com", ["example.com"]));

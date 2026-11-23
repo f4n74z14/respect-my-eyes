@@ -28,11 +28,17 @@ vm.runInContext(fs.readFileSync(path.join(__dirname, "../dist/background.js"), "
   assert.deepStrictEqual(JSON.parse(JSON.stringify(store.rmeSettings.excludedSites)), ["a.com"]);
   assert.strictEqual(store.rmeBrowserFonts.sansserif, "sansserif-font", "browser fonts refreshed from chrome.fontSettings");
   assert.strictEqual(store.rmeBrowserFonts.fixedSize, 14);
-  // editors report late monospace fonts from several frames at once
-  await Promise.all([1, 2, 3].map(() => new Promise(r => onMessage({ type: "rme:learn", names: ["Editor Mono", "Other Mono"] }, {}, r))));
-  const names = store.rmeSettings.manualFonts.filter(f => /Editor Mono|Other Mono/.test(f.name));
-  assert.strictEqual(names.length, 2, "learned once, no duplicates");
-  assert.ok(names.every(f => f.category === "mono"));
+  // editors report late monospace fonts from several frames at once; they are remembered per site, not in the user's list
+  const before = JSON.stringify(store.rmeSettings.manualFonts);
+  await Promise.all([1, 2, 3].map(() => new Promise(r => onMessage({ type: "rme:learn", host: "Site.Test", names: ["Editor Mono", "Other Mono"] }, {}, r))));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(store.rmeHints)), { "site.test": ["Editor Mono", "Other Mono"] }, "learned once, no duplicates");
+  assert.strictEqual(JSON.stringify(store.rmeSettings.manualFonts), before, "the user's font list is not touched");
 
-  console.log("background.test.js: migration + refresh + learn ok");
+  await new Promise(r => onMessage({ type: "rme:learn", host: "b.test", names: ["Other Mono"] }, {}, r));
+  assert.deepStrictEqual(Object.keys(store.rmeHints), ["site.test", "b.test"], "each site has its own hints");
+
+  assert.strictEqual(onMessage({ type: "rme:learn", names: ["No Host"] }, {}, () => {}), undefined, "a report without a site is ignored");
+  assert.strictEqual(onMessage({ type: "rme:learn", host: "x.test", names: "nope" }, {}, () => {}), undefined);
+
+  console.log("background.test.js: migration + refresh + site hints ok");
 })().catch(e => { console.error(e); process.exit(1); });
