@@ -628,6 +628,7 @@
     }
 
     try {
+        if (window === window.top) Promise.resolve(chrome.runtime.sendMessage({ type: "rme:pageStart" })).catch(() => {});
         F.storage.onChange(load);       // apply live, no reload needed
         chrome.runtime.onMessage.addListener((msg, sender, reply) => {
             if (msg && msg.type === "rme:report" && window === window.top) reply(buildReport());

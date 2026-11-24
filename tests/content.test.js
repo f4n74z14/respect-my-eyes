@@ -208,7 +208,8 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.strictEqual(JSON.stringify(resp.editors), '[{"sample":"div.monaco-editor","count":1}]', "report names the editor element");
   assert.strictEqual(resp.protect, true);
   assert.strictEqual(JSON.stringify(resp.deferred), '["Editor Only Mono"]');
-  assert.strictEqual(JSON.stringify(env.w.__sent), '[{"type":"rme:learn","host":"site.test","names":["Editor Only Mono"]}]', "late editor font is reported for learning, with its site");
+  assert.strictEqual(env.w.__sent[0] && env.w.__sent[0].type, "rme:pageStart", "top frame announces pageStart to reset tab badge/state");
+  assert.strictEqual(JSON.stringify(env.w.__sent.filter(m => m.type === "rme:learn")), '[{"type":"rme:learn","host":"site.test","names":["Editor Only Mono"]}]', "late editor font is reported for learning, with its site");
 
   // changing settings while the editor is open must not swap the font under it either
   env.listeners.forEach(fn => fn({ rmeSettings: {} }, "local"));
@@ -222,7 +223,7 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.ok(!env.sheets()[0].includes('@font-face{font-family:"Consolas"'), "the chosen font itself needs no rule");
   env.w.__onMessage({ type: "rme:report" }, {}, r => (resp = r));
   assert.strictEqual(resp.deferred.length, 0, "so nothing is left over for the editor");
-  assert.strictEqual(env.w.__sent.length, 0, "and nothing is learned twice");
+  assert.strictEqual(env.w.__sent.filter(m => m.type === "rme:learn").length, 0, "and nothing is learned twice");
   env = setup({ settings: undefined, bf: BF, hints: { "other.test": ["Editor Only Mono"] }, editor: true });
   await wait(400);
   assert.ok(!env.sheets()[0].includes('"Editor Only Mono"'), "hints are per site");
@@ -238,7 +239,7 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   seen.animationName = "rme-seen";
   ta.dispatchEvent(seen);
   await wait(100);
-  assert.ok(env.w.__sent.some(m => m.names.includes("Brand New Mono")), "unknown editor found through its hidden input, font learned");
+  assert.ok(env.w.__sent.some(m => m.names && m.names.includes("Brand New Mono")), "unknown editor found through its hidden input, font learned");
   assert.ok(!env.sheets()[1].includes('"Brand New Mono"'), "and not swapped under it");
 
   // text boxes are not forced unless the user opts in
@@ -273,7 +274,7 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   await wait(500);
   assert.ok(env.sheets()[0].includes("@scope (:root) to (") && env.sheets()[0].includes(".ed-a, .ed-b"), "comma-separated protected selector keeps @scope active");
   assert.ok(!env.sheets()[1].includes('"Editor Only Mono"'), "Visit 1 does not swap editor font under running editor");
-  assert.ok(env.w.__sent.some(m => m.names.includes("Editor Only Mono")), "Visit 1 learns editor font");
+  assert.ok(env.w.__sent.some(m => m.names && m.names.includes("Editor Only Mono")), "Visit 1 learns editor font");
 
   // late stylesheet or late FontFace added while an editor is already mounted must also defer mono fonts instead of swapping mid-session
   const lateEdStyle = env.w.document.createElement("style");
@@ -282,7 +283,7 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   env.w.__fonts.push({ family: "Late JS Mono", weight: "400", style: "normal", stretch: "normal" });
   await wait(400);
   assert.ok(!env.sheets()[1].includes('"Late Sheet Mono"') && !env.sheets()[1].includes('"Late JS Mono"'), "late mono stylesheet/FontFace does not swap while editor is mounted");
-  assert.ok(env.w.__sent.some(m => m.names.includes("Late Sheet Mono")) && env.w.__sent.some(m => m.names.includes("Late JS Mono")), "late mono fonts are learned for next load");
+  assert.ok(env.w.__sent.some(m => m.names && m.names.includes("Late Sheet Mono")) && env.w.__sent.some(m => m.names && m.names.includes("Late JS Mono")), "late mono fonts are learned for next load");
 
   // Visit 2 with custom mono font applies the learned editor font from base sheet at document_start
   env = setup({

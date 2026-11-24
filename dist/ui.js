@@ -81,6 +81,26 @@
         const timer = setTimeout(close, undo ? 8000 : 2600);
     }
 
+    let uiSheet = null, uiStyleEl = null;
+
+    function setUiFaces(css) {
+        if (!uiSheet && !uiStyleEl) {
+            try {
+                uiSheet = new CSSStyleSheet();
+                document.adoptedStyleSheets = [...document.adoptedStyleSheets, uiSheet];
+            } catch {
+                uiSheet = null;
+                uiStyleEl = document.createElement("style");
+                uiStyleEl.setAttribute("data-rme-ui", "");
+                (document.head || document.documentElement).appendChild(uiStyleEl);
+            }
+        }
+        if (uiSheet) {
+            try { uiSheet.replaceSync(css); return; } catch { uiSheet = null; }
+        }
+        if (uiStyleEl) uiStyleEl.textContent = css;
+    }
+
     /*
      * The extension follows its own rule: its pages use your fonts too. Content scripts do not run on chrome-extension://
      * pages, so the fonts are applied here. Without a browser or custom font the system stack stays.
@@ -88,11 +108,20 @@
     function applyFonts(settings, bf) {
         const { fonts } = F.resolveFonts(settings, bf);
         const root = document.documentElement;
+        const faces = [];
 
-        for (const [prop, cat] of [["--font-ui", "sans"], ["--font-mono", "mono"]]) {
-            if (fonts[cat].source === "default") root.style.removeProperty(prop);
-            else root.style.setProperty(prop, F.familyValue(cat, fonts));
+        for (const [prop, cat, alias, fb] of [
+            ["--font-ui", "sans", "__rme_ui_sans", "sans-serif"],
+            ["--font-mono", "mono", "__rme_ui_mono", "monospace"]
+        ]) {
+            if (fonts[cat].source === "default") {
+                root.style.removeProperty(prop);
+            } else {
+                faces.push(F.fontFaceCss(alias, cat, fonts[cat].name, null));
+                root.style.setProperty(prop, `${F.cssQuote(fonts[cat].name)}, ${F.cssQuote(alias)}, ${fb}`);
+            }
         }
+        setUiFaces(faces.join("\n"));
         root.classList.add("ready");
     }
 

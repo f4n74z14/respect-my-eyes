@@ -12,6 +12,8 @@
     <label class="switch" title="Turn the extension on or off"><input type="checkbox" id="enabled" aria-label="Enabled"><span></span></label>
 </header>
 
+<div id="banner" class="banner" hidden><span id="bannerText">Reload the page to apply this.</span><button id="reload" class="primary sm">Reload</button></div>
+
 <div id="app">
     <div id="site" class="site" hidden>
         <div class="text"><div class="host" id="host"></div><div class="hint" id="siteHint"></div></div>
@@ -19,7 +21,6 @@
     </div>
     <div id="note" hidden></div>
 
-    <div id="banner" class="banner" hidden><span id="bannerText">Reload the page to apply this.</span><button id="reload" class="primary sm">Reload</button></div>
 
     <h2>Fonts</h2>
     <div id="fonts"></div>
@@ -28,6 +29,10 @@
     <section id="editorsBox" hidden>
         <div class="h-row"><h2>Code editors</h2><label class="switch" title="Protect editors on this site"><input type="checkbox" id="edSwitch" aria-label="Protect editors on this site"><span></span></label></div>
         <div id="editors"></div>
+        <div class="ed-opt" id="edAutoRow" hidden>
+            <span>Auto-reload once for new editor fonts</span>
+            <label class="switch" title="Reload once automatically on first visit to apply your font in editors"><input type="checkbox" id="edAutoReload" aria-label="Auto-reload once for new editor fonts"><span></span></label>
+        </div>
     </section>
 </div>
 

@@ -92,9 +92,11 @@ t("settings normalisation", () => {
 
 t("editor settings are validated", () => {
     const d = F.normalizeSettings(null);
-    assert.deepStrictEqual([d.editors.protect, d.editors.selectors, d.editors.offSites], [true, [], []]);
-    const e = F.normalizeSettings({ version: 4, editors: { protect: false, selectors: [" .my-editor ", "a{color:red}", ".x;y", "@import", ".my-editor", ""], offSites: ["https://A.com/x", "a.com"] } });
+    assert.deepStrictEqual([d.editors.protect, d.editors.autoReload, d.editors.selectors, d.editors.offSites], [true, false, [], []]);
+    const e = F.normalizeSettings({ version: 4, editors: { protect: false, autoReload: true, selectors: [" .my-editor ", "a{color:red}", ".x;y", "@import", ".my-editor", ""], offSites: ["https://A.com/x", "a.com"] } });
     assert.strictEqual(e.editors.protect, false);
+    assert.strictEqual(e.editors.autoReload, true);
+    assert.strictEqual(F.normalizeSettings({ version: 4, editors: { autoReload: "yes" } }).editors.autoReload, false);
     assert.deepStrictEqual(e.editors.selectors, [".my-editor"]);
     assert.deepStrictEqual(e.editors.offSites, ["a.com"]);
     // v3 stored the built-in roots as well: only the user's own additions survive

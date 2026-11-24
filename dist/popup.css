@@ -5,7 +5,8 @@ header { display: flex; align-items: center; justify-content: space-between; mar
 h2 { margin: 16px 0 6px; }
 .h-row { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 6px; }
 .h-row h2 { margin: 0; }
-#app { transition: opacity .2s; }
+header, .banner, footer { position: relative; z-index: 2; pointer-events: auto; }
+#app { position: relative; z-index: 1; transition: opacity .2s; }
 #app.off { opacity: .45; pointer-events: none; }
 
 .site { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; }
@@ -13,7 +14,7 @@ h2 { margin: 16px 0 6px; }
 .site .text { min-width: 0; }
 .site .hint { margin: 0; }
 #note { padding: 10px 12px; color: var(--muted); font-size: 13px; }
-.banner { margin-top: 10px; }
+.banner { margin-bottom: 10px; }
 
 .font-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 6px 10px; margin: 0 0 4px; border-radius: 8px; }
 .font-item .kind { width: 62px; font-size: 12px; color: var(--muted); }
@@ -30,5 +31,6 @@ h2 { margin: 16px 0 6px; }
 .ed .text { flex: 1; min-width: 0; }
 .ed code { display: block; width: fit-content; max-width: 100%; }
 .ed .hint { margin-top: 2px; }
+.ed-opt { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 4px 2px; font-size: 12px; color: var(--muted); }
 footer { display: flex; justify-content: space-between; margin-top: 14px; }
 #toasts { bottom: 10px; }

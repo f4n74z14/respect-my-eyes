@@ -7,23 +7,36 @@ const dist = path.join(__dirname, "..", "dist");
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const BF = { available: true, standard: "Times New Roman", serif: "Georgia", sansserif: "Verdana", fixed: "Consolas", fixedSize: 13, defaultSize: 16 };
 
-async function page(file, { report, url = "https://site.test/" } = {}) {
+async function page(file, { report, tabState, url = "https://site.test/", bf = BF } = {}) {
   const read = f => fs.readFileSync(path.join(dist, f), "utf8");
   const html = read(file);
   const w = new JSDOM(html.replace(/<script src="[^"]+"><\/script>/g, ""), { runScripts: "outside-only", url: "chrome-extension://x/" + file }).window;
   w.self = w;
   w.Element.prototype.scrollIntoView = function () {};   // missing in jsdom
-  const store = { rmeBrowserFonts: BF };
-  const created = [];
+  const store = { rmeBrowserFonts: bf };
+  const created = [], events = [];
+  w.close = () => { events.push("close"); };
   w.chrome = {
     storage: { local: { get: () => Promise.resolve({ ...store }), set: (o, cb) => { Object.assign(store, o); cb && cb(); return Promise.resolve(); } }, onChanged: { addListener() {} } },
-    runtime: { sendMessage: async () => BF, getURL: p => "chrome-extension://x/" + p, openOptionsPage() {} },
-    tabs: { query: async () => [{ id: 1, url }], sendMessage: async () => report, create: o => created.push(o.url), reload() {} }
+    runtime: {
+      sendMessage: async m => {
+        if (m && m.type === "rme:tabState") return tabState || { learned: [], hosts: [] };
+        return bf;
+      },
+      getURL: p => "chrome-extension://x/" + p,
+      openOptionsPage() {}
+    },
+    tabs: {
+      query: async () => [{ id: 1, url }],
+      sendMessage: async () => report,
+      create: o => created.push(o.url),
+      reload: async id => { await wait(20); events.push("reload:" + id); }
+    }
   };
   // load the scripts in the order the page lists them, like the browser does
   for (const [, src] of html.matchAll(/<script src="([^"]+)"><\/script>/g)) w.eval(read(src));
   await wait(150);
-  return { w, d: w.document, store, created, $: id => w.document.getElementById(id), ev: (n, t) => t.dispatchEvent(new w.Event(n, { bubbles: true, cancelable: true })) };
+  return { w, d: w.document, store, created, events, $: id => w.document.getElementById(id), ev: (n, t) => t.dispatchEvent(new w.Event(n, { bubbles: true, cancelable: true })) };
 }
 const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
 
@@ -34,13 +47,31 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.strictEqual(o.d.querySelectorAll("#preview .sample").length, 3, "live preview");
   assert.ok(o.$("preview").firstChild.style.fontFamily.includes("Verdana"), "preview uses the browser font");
   assert.strictEqual(o.d.querySelectorAll("#nav a").length, 6, "a short list of sections");
-  assert.ok(o.$("protect").contains(o.$("edProtect")) && o.$("protect").contains(o.$("edSelectors")), "protection has its own section");
+  assert.ok(o.$("protect").contains(o.$("edProtect")) && o.$("protect").contains(o.$("edAutoReload")) && o.$("protect").contains(o.$("edSelectors")), "protection has its own section");
   assert.ok(!o.$("monospace").contains(o.$("edProtect")), "and is no longer part of Monospace");
   assert.ok(!o.d.getElementById("seed") && !o.d.getElementById("autoLearn") && !o.d.getElementById("seedNames"), "internal knobs are gone");
   assert.ok(!o.$("sizeNum").classList.contains("show") && !o.$("scaleNum").classList.contains("show"), "custom numbers are hidden until Custom");
   assert.strictEqual(o.d.querySelectorAll("#manualList .list-row").length, 20);
   assert.strictEqual(o.$("count").textContent, "20 fonts");
   assert.strictEqual(o.$("filter").hidden, false, "filter appears for long lists");
+
+  // the extension follows its own rule: its pages use your fonts (browser sans / fixed-width) + @font-face local() alias
+  const rootStyle = o.d.documentElement.style;
+  const uiFacesText = () => {
+    const el = o.d.querySelector("style[data-rme-ui]");
+    if (el) return el.textContent;
+    return (o.d.adoptedStyleSheets || []).map(s => Array.from(s.cssRules || []).map(r => r.cssText).join("\n")).join("\n");
+  };
+  assert.ok(rootStyle.getPropertyValue("--font-ui").includes('"Verdana"') && rootStyle.getPropertyValue("--font-ui").endsWith("sans-serif"), "UI font = browser sans-serif font");
+  assert.ok(rootStyle.getPropertyValue("--font-mono").includes('"Consolas"'), "code font = browser fixed-width font");
+  assert.ok(/local\("?Verdana"?\)/.test(uiFacesText()) && /local\("?Consolas"?\)/.test(uiFacesText()), "UI injects local() @font-face aliases too");
+  assert.ok(o.d.documentElement.classList.contains("ready"), "page is shown once the fonts are applied");
+  const modeSelect = o.$("fontRows").querySelector("select");
+  modeSelect.value = "custom"; o.ev("change", modeSelect);
+  const customInput = o.$("fontRows").querySelector("input");
+  customInput.value = "Inter"; o.ev("input", customInput);
+  assert.ok(rootStyle.getPropertyValue("--font-ui").includes('"Inter"'), "choosing a custom font changes the page at once");
+  assert.ok(/local\("?Inter"?\)/.test(uiFacesText()), "UI @font-face alias updates to custom font");
 
   // filter
   o.$("filter").value = "poppins"; o.ev("input", o.$("filter"));
@@ -96,6 +127,8 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.ok(o.$("sizeNum").classList.contains("show"), "custom size slides in");
   o.$("textarea").checked = true; o.ev("change", o.$("textarea")); await wait(300);
   assert.strictEqual(o.store.rmeSettings.mono.textarea, true);
+  o.$("edAutoReload").checked = true; o.ev("change", o.$("edAutoReload")); await wait(300);
+  assert.strictEqual(o.store.rmeSettings.editors.autoReload, true);
   o.$("edProtect").checked = false; o.ev("change", o.$("edProtect")); await wait(300);
   assert.strictEqual(o.store.rmeSettings.editors.protect, false);
   o.$("edSelectors").value = ".my-editor\n:::bad"; o.ev("input", o.$("edSelectors")); await wait(300);
@@ -120,6 +153,9 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.ok(p.$("editors").textContent.includes("Remembered"), "late editor font is remembered automatically");
   assert.strictEqual(p.$("banner").hidden, false, "which needs a reload");
   assert.strictEqual(p.$("edSwitch").checked, true);
+  assert.strictEqual(p.$("edAutoReload").checked, false);
+  p.$("edAutoReload").checked = true; p.ev("change", p.$("edAutoReload")); await wait(50);
+  assert.strictEqual(p.store.rmeSettings.editors.autoReload, true, "popup can toggle auto-reload");
 
   // one switch for the whole site
   p.$("edSwitch").checked = false; p.ev("change", p.$("edSwitch")); await wait(50);
@@ -142,6 +178,32 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   p.$("enabled").checked = false; p.ev("change", p.$("enabled")); await wait(50);
   assert.ok(p.$("app").classList.contains("off"));
 
+  // the popup uses the fonts too, and its reload banner stays clickable when everything is switched off
+  assert.ok(p.d.documentElement.style.getPropertyValue("--font-ui").includes('"Verdana"'), "popup uses the browser's sans font");
+  assert.strictEqual(p.$("banner").closest("#app"), null, "the banner is outside the dimmed area");
+  assert.strictEqual(p.$("banner").hidden, false, "and it is shown after switching the extension off");
+  assert.ok(!p.$("reload").disabled);
+  const cssPopup = fs.readFileSync(path.join(dist, "popup.css"), "utf8");
+  const cssUi = fs.readFileSync(path.join(dist, "ui.css"), "utf8");
+  assert.ok(/#app\.off|\.off\b/.test(cssPopup) && /\.banner[^{]*\{[^}]*pointer-events:\s*auto/.test(cssPopup) && cssUi.includes("--font-ui"), "dimming is applied to #app only and banner forces pointer-events: auto");
+  p.$("reload").click();
+  await wait(60);
+  assert.deepStrictEqual(p.events, ["reload:1", "close"], "reload button awaits tabs.reload before closing the popup");
+
+  // subframe-only learned editor font (like Monaco Playground preview iframe) is surfaced via rme:tabState
+  p = await page("popup.html", {
+    report: { host: "microsoft.github.io", active: true, reason: "", protect: true, siteOff: false, deferred: [], unknown: [], editors: [] },
+    tabState: { learned: ["Iframe Editor Mono"], hosts: ["isolated-playground.github.io"] }
+  });
+  assert.strictEqual(p.$("editorsBox").hidden, false, "subframe learned font opens Code editors section");
+  assert.ok(p.$("editors").textContent.includes("Iframe Editor Mono") && p.$("editors").textContent.includes("Remembered"));
+  assert.strictEqual(p.$("banner").hidden, false, "subframe learned font shows reload banner");
+
+  // without a usable browser font the system stack stays
+  const plain = await page("popup.html", { report, bf: { available: false } });
+  assert.strictEqual(plain.d.documentElement.style.getPropertyValue("--font-ui"), "", "no variable set, so the CSS default applies");
+  assert.ok(plain.d.documentElement.classList.contains("ready"));
+
   // unsupported page
   p = await page("popup.html", { report: undefined, url: "chrome://extensions/" });
   assert.strictEqual(p.$("note").hidden, false);
@@ -163,7 +225,7 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.strictEqual(p.$("site").hidden, false, "shown on an excluded site");
 
   // the hidden attribute must really hide: a display rule on the element used to beat the browser's default
-  assert.ok(/\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(fs.readFileSync(path.join(dist, "ui.css"), "utf8")), "[hidden] always wins");
+  assert.ok(/\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(cssUi), "[hidden] always wins");
 
   // nothing to show: no empty sections
   p = await page("popup.html", { report: { host: "x.test", active: true, protect: true, siteOff: false, deferred: [], unknown: [], editors: [] } });

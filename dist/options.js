@@ -159,6 +159,7 @@
         };
 
         bindSwitch("edProtect", ed.protect, v => { ed.protect = v; save(); });
+        bindSwitch("edAutoReload", ed.autoReload, v => { ed.autoReload = v; save(); });
         bindLines("edSelectors", ed.selectors, lines => { ed.selectors = F.cleanSelectors(lines); warn(); save(); });
         warn();
     }

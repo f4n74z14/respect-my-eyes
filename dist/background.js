@@ -79,21 +79,84 @@ if (chrome.fontSettings) {
 // Editors reveal monospace fonts late; remember them for that site so its next load applies them from the first paint.
 // Serialized, because several frames can report at once and storage has no atomic read-modify-write.
 let learnChain = Promise.resolve();
+const tabLearned = new Map();   // tabId -> { hosts: Set, names: Set, reloaded: boolean }
 
-function learn(host, names) {
+function setBadge(tabId, active) {
+    if (tabId == null || !chrome.action) return;
+    try {
+        if (active) {
+            if (chrome.action.setBadgeBackgroundColor) chrome.action.setBadgeBackgroundColor({ tabId, color: "#EBCB8B" });
+            if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ tabId, color: "#2E3440" });
+            if (chrome.action.setBadgeText) chrome.action.setBadgeText({ tabId, text: "!" });
+            if (chrome.action.setTitle) chrome.action.setTitle({ tabId, title: "Respect My Eyes — Reload once to apply your font in code editors" });
+        }
+        else {
+            if (chrome.action.setBadgeText) chrome.action.setBadgeText({ tabId, text: "" });
+            if (chrome.action.setTitle) chrome.action.setTitle({ tabId, title: "Respect My Eyes" });
+        }
+    }
+    catch { /* action API unavailable or tab already closed */ }
+}
+
+function resetTab(tabId) {
+    if (tabId == null) return;
+    tabLearned.delete(tabId);
+    setBadge(tabId, false);
+}
+
+if (chrome.tabs) {
+    if (chrome.tabs.onRemoved) chrome.tabs.onRemoved.addListener(tabId => tabLearned.delete(tabId));
+    if (chrome.tabs.onUpdated) {
+        chrome.tabs.onUpdated.addListener((tabId, info) => {
+            if (info && info.status === "loading") resetTab(tabId);
+        });
+    }
+}
+
+function learn(host, names, tabId) {
     learnChain = learnChain.then(async () => {
-        const stored = (await chrome.storage.local.get(F.KEYS.hints))[F.KEYS.hints];
-        const next = F.addHints(stored, host, names.slice(0, 20));
+        const stored = await chrome.storage.local.get([F.KEYS.hints, F.KEYS.settings]);
+        const next = F.addHints(stored[F.KEYS.hints], host, names.slice(0, 20));
 
-        if (next) await chrome.storage.local.set({ [F.KEYS.hints]: next });
+        if (!next) return;
+        await chrome.storage.local.set({ [F.KEYS.hints]: next });
+
+        if (tabId == null) return;
+        let entry = tabLearned.get(tabId);
+        if (!entry) { entry = { hosts: new Set(), names: new Set(), reloaded: false }; tabLearned.set(tabId, entry); }
+
+        const hostNorm = F.cleanHostList([host])[0];
+        if (hostNorm) entry.hosts.add(hostNorm);
+        for (const n of F.cleanNameList(names)) entry.names.add(n);
+        setBadge(tabId, entry.names.size > 0);
+
+        const settings = F.normalizeSettings(stored[F.KEYS.settings]);
+        if (settings.enabled && settings.editors.protect && settings.editors.autoReload && !entry.reloaded && chrome.tabs && chrome.tabs.reload) {
+            entry.reloaded = true;
+            setTimeout(() => {
+                try { Promise.resolve(chrome.tabs.reload(tabId)).catch(() => {}); } catch {}
+            }, 120);
+        }
     }).catch(() => { /* keep the chain alive */ });
 
     return learnChain;
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+    const tabId = sender && sender.tab ? sender.tab.id : null;
+
+    if (msg && msg.type === "rme:pageStart" && tabId != null) {
+        resetTab(tabId);
+        reply && reply(true);
+        return;
+    }
+    if (msg && msg.type === "rme:tabState") {
+        const entry = tabLearned.get(msg.tabId);
+        reply({ learned: entry ? [...entry.names] : [], hosts: entry ? [...entry.hosts] : [] });
+        return;
+    }
     if (msg && msg.type === "rme:learn" && typeof msg.host === "string" && Array.isArray(msg.names)) {
-        learn(msg.host, msg.names).then(() => reply(true));
+        learn(msg.host, msg.names, tabId).then(() => reply(true));
         return true;
     }
     if (msg && msg.type === "rme:refresh") {

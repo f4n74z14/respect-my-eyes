@@ -7,12 +7,12 @@ What the extension does, how, and what each decision costs. Behaviour is covered
 | File | Role |
 | --- | --- |
 | `dist/manifest.json` | Manifest V3. Permissions: `storage`, `fontSettings`. One content script on all URLs and frames, at `document_start`. |
-| `dist/background.js` | Service worker. Reads `chrome.fontSettings`, caches it, migrates old storage keys, learns editor fonts. |
-| `dist/content.js` | Page script. Scans, classifies, and injects the override CSS. |
-| `dist/common.js` | Shared pure logic: classification, settings, CSS builders. Touches `chrome.*` only in `RME.storage`. |
-| `dist/ui.js` | DOM helpers shared by the popup and settings page. Also applies the user's fonts to those pages (`--font-ui`, `--font-mono`), because content scripts do not run on `chrome-extension://` pages. Without a browser or custom font the system stack stays. |
-| `dist/popup.*`, `dist/options.*` | Popup and settings page. |
-| `dist/ui.css` | Shared styles (Nord palette, light and dark). Page-specific styles are in `popup.css` and `options.css`. |
+| `dist/background.js` | Service worker. Reads `chrome.fontSettings`, caches it, migrates old storage keys, learns editor fonts per site, tracks per-tab newly learned fonts (`rme:pageStart` / `rme:tabState`), shows a `"!"` badge when a reload is needed, and performs opt-in one-shot tab auto-reload (`editors.autoReload`). |
+| `dist/content.js` | Page script. Scans, classifies, and injects the override CSS. Sends `rme:pageStart` from the top frame and `rme:learn` from any frame that discovers an editor monospace font late. |
+| `dist/common.js` | Shared pure logic: classification, settings (`editors.autoReload` included), CSS builders, selector-list validation. Touches `chrome.*` only in `RME.storage`. |
+| `dist/ui.js` | DOM helpers shared by the popup and settings page. Applies the user's sans and mono fonts to those pages via `--font-ui` / `--font-mono` plus `local()` `@font-face` aliases (`__rme_ui_sans`, `__rme_ui_mono`) so local/PostScript font names resolve too. Without a browser or custom font the system stack stays. |
+| `dist/popup.*`, `dist/options.*` | Popup and settings page. Both keep fonts in sync on `storage.onChanged`, refresh missing browser fonts, and expose the `editors.autoReload` toggle; the popup keeps the reload banner interactive above `#app.off`, awaits `chrome.tabs.reload()` before closing, and merges `rme:tabState` from iframes. |
+| `dist/ui.css` | Shared styles (Nord palette, light and dark), applying `--font-ui` and `--font-mono` across controls and monospace elements (`code`, `pre`, `kbd`, `samp`, `textarea`). Page-specific styles are in `popup.css` and `options.css`. |
 
 Storage (`chrome.storage.local`): `rmeSettings` (user settings), `rmeBrowserFonts` (cache of the browser's font preferences, written by the service worker) and `rmeHints` (monospace fonts that editors used, per site). Keys from older builds (`settings`, `browserFonts`) are migrated on update.
 
@@ -54,6 +54,7 @@ Editors measure the width of a character and cache it, then place the cursor fro
 - Forced monospace size and letter-spacing never reach inside the boundary (`@scope (:root) to (...)`).
 - A monospace font an editor was already using is not swapped under it — including fonts discovered in late stylesheets, CSS variables, or `document.fonts` after an editor is already mounted. Instead it is remembered (service worker, serialized) so the next load applies it from the first paint.
 - The fonts a site's editor used are stored as a **hint for that site** (at most 300 sites, 12 names each, oldest dropped first). They are in the base sheet and therefore replaced before any page script runs, on that site only.
+- **First-visit notification & optional auto-reload.** Whenever any frame (including nested editor iframes) calls `rme:learn` and stores new hints for a tab, the service worker sets a `"!"` badge (`#EBCB8B`) on that tab and exposes the learned names via `rme:tabState`. The popup merges subframe `tabLearned` fonts into its Code editors section and displays the reload banner, which remains interactive (`z-index: 2; pointer-events: auto`) even while `#app.off` dims the rest of the popup, and awaits `chrome.tabs.reload` before closing. Users who prefer zero-click first-visit replacement can enable **Auto-reload once for new editors** (`editors.autoReload`), which triggers one guarded `chrome.tabs.reload(tabId)` (~120 ms settle) after saving new hints for a tab.
 - A per-site switch and a *Protected areas* field (any selector; all selector-based rules stay out of it) cover misdetection and widgets that look wrong.
 
 ## Performance
@@ -75,7 +76,8 @@ Editors measure the width of a character and cache it, then place the cursor fro
 | Copy descriptors from `document.fonts` | Beats unremovable page faces, including variable fonts | A split regular/bold range is approximated with two extra rules |
 | Constructed stylesheets | Immune to page CSP, cheap to update | A page that reassigns `adoptedStyleSheets` can drop them until the next rescan |
 | Hidden-input detection of editors | No class lists, works for new editors | The boundary includes two ancestors of the hidden input, so a few unrelated code blocks next to a search box lose forced sizing |
-| Learn editor fonts per site | Fixed after one reload, no setup, the user's list is not touched | Hints are invisible; the first visit to a site shows the site's font in its editor |
+| Learn editor fonts per site + badge notification | Fixed after one reload, works across iframes, no setup, the user's list is not touched | On the first visit to a site, the editor keeps its original font until reloaded (flagged with a `"!"` badge and popup banner) |
+| Opt-in one-shot auto-reload (`editors.autoReload`) | Applies the user's font in newly discovered editors on Visit 1 without manual reload | Causes one brief automatic reload on the first visit to a new editor site; kept off by default |
 | Declare listed fonts on demand | Cost independent of the list length | A listed font is replaced at the first scan (as soon as a stylesheet loads), not at `document_start` |
 | `@scope` and `:has()` for protection | Pure CSS, no DOM changes | Needs Chromium 118+ |
 | Text boxes are not forced to monospace | No drift on mirrored text boxes | Users who want it must switch it on |

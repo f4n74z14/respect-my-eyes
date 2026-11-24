@@ -8,13 +8,19 @@
     const BROWSER_STORES = new Set(["chromewebstore.google.com", "microsoftedge.microsoft.com"]);
     const matches = (host, list) => list.filter(x => host === x || host.endsWith(`.${x}`));
 
-    let settings, bf, tab, host = "", report = null;
+    let settings, bf, tab, host = "", report = null, baseBanner = "";
 
     const save = () => F.storage.save(settings);
 
-    function needsReload(text = "Reload the page to apply this.") {
+    function needsReload(text = "Reload the page to apply this.", persist = false) {
+        if (persist) baseBanner = text;
         $("bannerText").textContent = text;
         $("banner").hidden = false;
+    }
+
+    function restoreBanner() {
+        if (baseBanner) needsReload(baseBanner);
+        else $("banner").hidden = true;
     }
 
     function openSettings(hash = "") {
@@ -57,6 +63,7 @@
                 settings.excludedSites.push(host);
                 needsReload("Reload the page to see its original fonts.");
             }
+            else restoreBanner();
             await save();
             renderSite();
         });
@@ -84,7 +91,7 @@
                     setTimeout(() => { card.remove(); $("attention").hidden = !$("unknown").children.length; }, 180);
 
                     toast(`Added \u201c${name}\u201d as ${SITE_CATS.find(c => c[0] === category)[1].toLowerCase()}`);
-                    if (category === "ignore") needsReload("Reload the page to bring the icon font back.");
+                    if (category === "ignore") needsReload("Reload the page to bring the icon font back.", true);
                 }
             });
 
@@ -105,10 +112,10 @@
 
     // Code editors found on the page, named by element, with one switch for the whole site. Monospace fonts they were
     // already using stay untouched until the next load (they are remembered automatically).
-    function renderEditors() {
+    function renderEditors(tabLearned = []) {
         const active = !!(report && report.active);
         const editors = active ? report.editors : [];
-        const late = active ? report.deferred : [];
+        const late = F.cleanNameList([...(active ? report.deferred : []), ...tabLearned]);
 
         $("editorsBox").hidden = !(editors.length || late.length || (active && report.siteOff));
         if ($("editorsBox").hidden) return;
@@ -122,9 +129,18 @@
             if (!protect) protection.offSites.push(host);
 
             await save();
-            needsReload(protect ? "Reload the page to protect its editors." : "Reload the page for a clean result.");
+            needsReload(protect ? "Reload the page to protect its editors." : "Reload the page for a clean result.", true);
         });
         $("edSwitch").disabled = !protection.protect;
+
+        if ($("edAutoRow")) {
+            $("edAutoRow").hidden = !protection.protect;
+            bindSwitch("edAutoReload", protection.autoReload, async auto => {
+                protection.autoReload = auto;
+                await save();
+                toast(auto ? "New editor sites will reload once automatically" : "Auto-reload turned off");
+            });
+        }
 
         const text = (main, hint) => {
             const box = el("div", "text");
@@ -135,10 +151,10 @@
         $("editors").replaceChildren(
             ...(protection.protect ? [] : [el("div", "hint", "Editor protection is off in Settings.")]),
             ...editors.map(({ sample, count }) => row(text(el("code", "", sample, { title: sample })), count > 1 ? [el("span", "hint", `\u00d7${count}`)] : [])),
-            ...late.map(name => row(text(el("div", "", name), "Already in use by an editor. Applied after a reload."), [el("span", "badge browser", "Remembered")]))
+            ...late.map(name => row(text(el("div", "", name), "Saved from an editor on this page. Reload once so it measures your font."), [el("span", "badge browser", "Remembered")]))
         );
 
-        if (late.length) needsReload("Reload the page to apply remembered fonts.");
+        if (late.length) needsReload("Editor font saved \u2014 reload once to apply your font.", true);
     }
 
     // Where the extension cannot run, and what to tell the user
@@ -150,7 +166,7 @@
 
         if (web) {      // a tab that was open before the extension was installed or updated
             $("note").textContent = "The extension is not running on this page yet.";
-            needsReload("Reload the page to start it.");
+            needsReload("Reload the page to start it.", true);
         }
         else $("note").textContent = "Browser pages and the Web Store can't be changed by extensions.";
 
@@ -161,21 +177,49 @@
         ({ settings, bf } = await F.storage.load());
         applyFonts(settings, bf);
 
+        const initialEnabled = settings.enabled;
         bindSwitch("enabled", settings.enabled, async on => {
             settings.enabled = on;
             await save();
             $("app").classList.toggle("off", !on);
             if (!on) needsReload("Reload the page to restore its original fonts.");
+            else if (!initialEnabled) needsReload("Reload the page to apply your fonts.");
+            else restoreBanner();
         });
         $("app").classList.toggle("off", !settings.enabled);
         $("options").onclick = () => openSettings();
-        $("reload").onclick = () => { if (tab) chrome.tabs.reload(tab.id); window.close(); };
+        $("reload").onclick = async () => {
+            const target = tab || (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+            if (target) {
+                try { await chrome.tabs.reload(target.id); } catch {}
+            }
+            window.close();
+        };
 
         renderFonts();
 
+        if (!bf) {
+            try {
+                const fresh = await F.ui.send({ type: "rme:refresh" });
+                if (fresh && typeof fresh === "object" && "available" in fresh) {
+                    bf = fresh;
+                    applyFonts(settings, bf);
+                    renderFonts();
+                }
+            } catch {}
+        }
+
         [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-        try { report = tab ? await chrome.tabs.sendMessage(tab.id, { type: "rme:report" }, { frameId: 0 }) : null; }
+        let tabLearned = [];
+        try {
+            const [rep, state] = await Promise.all([
+                tab ? chrome.tabs.sendMessage(tab.id, { type: "rme:report" }, { frameId: 0 }).catch(() => null) : null,
+                tab ? F.ui.send({ type: "rme:tabState", tabId: tab.id }).catch(() => null) : null
+            ]);
+            report = rep;
+            if (state && Array.isArray(state.learned)) tabLearned = state.learned;
+        }
         catch { report = null; }
 
         if (report) host = report.host;
@@ -187,8 +231,17 @@
 
         renderSite();
         renderUnknown();
-        renderEditors();
+        renderEditors(tabLearned);
     }
+
+    F.storage.onChange(changes => {
+        if (changes[F.KEYS.fonts]) bf = changes[F.KEYS.fonts].newValue;
+        if (changes[F.KEYS.settings]) settings = F.normalizeSettings(changes[F.KEYS.settings].newValue);
+        if (settings) {
+            applyFonts(settings, bf);
+            renderFonts();
+        }
+    });
 
     main();
 })();
