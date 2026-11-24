@@ -64,6 +64,7 @@
         // using is not swapped under them, it is learned for the next load instead.
         editors: {
             protect: true,
+            autoReload: false,      // reload the tab once when a new editor font is learned
             selectors: [],          // extra editor roots, for the rare editor the automatic detection misses
             offSites: []            // sites where protection is switched off (from the popup)
         },
@@ -393,6 +394,7 @@
         const e = raw.editors;
         if (e && typeof e === "object") {
             s.editors.protect = e.protect !== false;
+            s.editors.autoReload = e.autoReload === true;
             s.editors.offSites = cleanHostList(e.offSites);
             // v3 stored the built-in roots too; only the user's own additions are kept now
             if (Array.isArray(e.selectors)) {
