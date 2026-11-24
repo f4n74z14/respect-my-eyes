@@ -10,7 +10,7 @@ What the extension does, how, and what each decision costs. Behaviour is covered
 | `dist/background.js` | Service worker. Reads `chrome.fontSettings`, caches it, migrates old storage keys, learns editor fonts. |
 | `dist/content.js` | Page script. Scans, classifies, and injects the override CSS. |
 | `dist/common.js` | Shared pure logic: classification, settings, CSS builders. Touches `chrome.*` only in `RME.storage`. |
-| `dist/ui.js` | DOM helpers shared by the popup and settings page. |
+| `dist/ui.js` | DOM helpers shared by the popup and settings page. Also applies the user's fonts to those pages (`--font-ui`, `--font-mono`), because content scripts do not run on `chrome-extension://` pages. Without a browser or custom font the system stack stays. |
 | `dist/popup.*`, `dist/options.*` | Popup and settings page. |
 | `dist/ui.css` | Shared styles (Nord palette, light and dark). Page-specific styles are in `popup.css` and `options.css`. |
 
@@ -47,11 +47,12 @@ Editors measure the width of a character and cache it, then place the cursor fro
 
 **Detection.** Every mainstream editor routes keyboard input through a hidden element with browser "magic" switched off (`autocorrect="off"`, `spellcheck="false"`): a `<textarea>` in Ace, xterm.js, CodeMirror 5 and classic Monaco; a `role="textbox"` element in CodeMirror 6 and Monaco's `EditContext` mode (default since 0.57). Checked against the sources of monaco-editor 0.57, @codemirror/view 6.43, codemirror 5.65, ace-builds 1.45 and @xterm/xterm 6.0. That element and its two nearest ancestors form the boundary, written as one CSS selector list (with `:has()`), plus a fallback list of well-known roots. No class names, no polling, and editors mounted late are covered.
 
-**A late editor** announces itself: its hidden input runs a 1 ms no-op animation from the base sheet, and `animationstart` triggers a look at the fonts inside it.
+**A late editor** announces itself: its hidden input runs a 1 ms no-op animation from the base sheet, and `animationstart` triggers a look at the fonts inside it (walking open shadow roots up to 2,000 elements).
 
 **Protection.**
+- Selector validation splits comma-separated lists and validates each item inside `:is(...)` (Chromium's `CSS.supports("selector(...)")` rejects top-level commas, and `:is(...)` rejects pseudo-elements unsuitable for `@scope` limits).
 - Forced monospace size and letter-spacing never reach inside the boundary (`@scope (:root) to (...)`).
-- A monospace font an editor was already using is not swapped under it. It is remembered (service worker, serialized) so the next load applies it from the first paint.
+- A monospace font an editor was already using is not swapped under it — including fonts discovered in late stylesheets, CSS variables, or `document.fonts` after an editor is already mounted. Instead it is remembered (service worker, serialized) so the next load applies it from the first paint.
 - The fonts a site's editor used are stored as a **hint for that site** (at most 300 sites, 12 names each, oldest dropped first). They are in the base sheet and therefore replaced before any page script runs, on that site only.
 - A per-site switch and a *Protected areas* field (any selector; all selector-based rules stay out of it) cover misdetection and widgets that look wrong.
 

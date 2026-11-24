@@ -279,6 +279,35 @@
     // A selector ending in "*" sweeps over every descendant, icon elements included, so it is never mirrored
     const dropSweeps = text => splitSelectorList(text).filter(s => !/(^|[\s>+~])\*$/.test(s)).join(",");
 
+    // Validates a CSS selector or comma-separated selector list for use in @scope limits and closest().
+    // Chromium's CSS.supports("selector(...)") only accepts a single complex selector (comma-separated lists
+    // return false), so each top-level item is checked inside :is(...) after rejecting empty slots or
+    // unbalanced delimiters. :is() also rejects pseudo-elements (invalid in @scope limits).
+    function validSelector(sel) {
+        sel = String(sel || "").trim();
+        if (!sel || /[{};@\\]/.test(sel)) return false;
+
+        const parts = [];
+        let depth = 0, quote = "", cur = "";
+
+        for (const ch of sel) {
+            if (quote) { if (ch === quote) quote = ""; }
+            else if (ch === '"' || ch === "'") quote = ch;
+            else if ("([".includes(ch)) depth++;
+            else if (")]".includes(ch)) { if (--depth < 0) return false; }
+            else if (ch === "," && depth === 0) { parts.push(cur.trim()); cur = ""; continue; }
+            cur += ch;
+        }
+        parts.push(cur.trim());
+        if (depth !== 0 || quote || parts.some(function (p) { return !p; })) return false;
+
+        try {
+            if (typeof CSS === "undefined" || !CSS.supports) return true;
+            return parts.every(function (p) { return CSS.supports("selector(:is(" + p + "))"); });
+        }
+        catch { return false; }
+    }
+
     // Font names end up inside CSS strings, so quotes and backslashes are dropped
     function cleanFontName(x) { return String(x || "").trim().replace(/["\\]/g, "").slice(0, 120); }
 
@@ -568,6 +597,6 @@
         // font names
         norm, cssQuote, buildMatchers, classifyName, splitFamilies, analyzeStack, looksLikeFontStack,
         // css
-        editorBoundary, splitSelectorList, dropSweeps, familyValue, fontFaceCss, fontFaceExtraCss, isStandardFace, monoRule, monoDefaultsCss
+        editorBoundary, splitSelectorList, dropSweeps, validSelector, familyValue, fontFaceCss, fontFaceExtraCss, isStandardFace, monoRule, monoDefaultsCss
     };
 })(typeof self !== "undefined" ? self : this);

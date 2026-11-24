@@ -193,4 +193,37 @@ t("generates compact @font-face rules", () => {
     assert.ok(!F.cssQuote('a"b\\c').includes('\\'));
 });
 
+t("validates selector lists", () => {
+    const prevCss = global.CSS;
+    try {
+        global.CSS = {
+            supports: expr => {
+                const m = /^selector\(([\s\S]*)\)$/.exec(String(expr).trim());
+                if (!m) return false;
+                const inner = m[1].trim();
+                let d = 0, q = "";
+                for (const ch of inner) {
+                    if (q) { if (ch === q) q = ""; }
+                    else if (ch === '"' || ch === "'") q = ch;
+                    else if ("([".includes(ch)) d++;
+                    else if (")]".includes(ch)) d--;
+                    else if (ch === "," && d === 0) return false;
+                }
+                return d === 0 && !/:::|::before|::after/.test(inner);
+            }
+        };
+        assert.strictEqual(F.validSelector(".monaco-editor"), true);
+        assert.strictEqual(F.validSelector(F.editorBoundary([".mine"])), true, "comma-separated boundary passes in real Chromium CSS.supports");
+        assert.strictEqual(F.validSelector(".a, .b"), true);
+        assert.strictEqual(F.validSelector(""), false);
+        assert.strictEqual(F.validSelector(".a,"), false, "trailing comma rejected");
+        assert.strictEqual(F.validSelector(", .a"), false, "leading comma rejected");
+        assert.strictEqual(F.validSelector("div):where(span"), false, "unbalanced parens rejected");
+        assert.strictEqual(F.validSelector(".a::before"), false, "pseudo-elements unsuitable for @scope rejected");
+        assert.strictEqual(F.validSelector(":::bad"), false);
+    } finally {
+        global.CSS = prevCss;
+    }
+});
+
 console.log("common.test.js: " + n + " groups passed");

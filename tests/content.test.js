@@ -36,9 +36,24 @@ function setup({ settings, bf, hints, fonts = [], editor = false, host = "https:
     { url: host, runScripts: "outside-only", pretendToBeVisual: true });
   const w = dom.window;
   w.self = w;
-  if (editor) {   // @scope + selector() support, and a Monaco-like element whose font comes from an inline style
+  if (editor) {   // @scope + selector() support matching real Chromium (top-level comma lists return false), and a Monaco-like element
     w.CSSScopeRule = function () {};
-    w.CSS = { supports: () => true };
+    w.CSS = {
+      supports: expr => {
+        const m = /^selector\(([\s\S]*)\)$/.exec(String(expr).trim());
+        if (!m) return false;
+        const inner = m[1].trim();
+        let d = 0, q = "";
+        for (const ch of inner) {
+          if (q) { if (ch === q) q = ""; }
+          else if (ch === '"' || ch === "'") q = ch;
+          else if ("([".includes(ch)) d++;
+          else if (")]".includes(ch)) d--;
+          else if (ch === "," && d === 0) return false;
+        }
+        return d === 0 && !/:::|::before|::after/.test(inner);
+      }
+    };
     const d = w.document.createElement("div");
     d.className = "monaco-editor";
     d.innerHTML = '<div class="view-lines" style="font-family: \'Editor Only Mono\', monospace">x</div>';
@@ -118,7 +133,7 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.ok(site.includes('@font-face{font-family:"Lucida Grande"'), "rules nested in @media are handled by name");
   assert.ok(!/\.wide/.test(site), "a named stack is replaced by name, its selector is not mirrored");
   assert.ok(!/mce-container|mce-ico/.test(site), "page rules like .mce-container * never clobber descendants that have their own icon font");
-  assert.ok(/(^|[},\n])\.sys[,{]/.test(site) && !/\.sweep/.test(site), "generic stacks are mirrored, but never as a sweep over every descendant");
+  assert.ok(/(^|[}{,\n])\.sys[,{]/.test(site) && !/\.sweep/.test(site), "generic stacks are mirrored, but never as a sweep over every descendant");
   assert.ok(!/(^|,)\*[,{]/.test(site) && !site.includes(":first"), "universal selector and @page skipped");
   assert.ok(/html,body\{font-family:"Verdana", sans-serif!important\}/.test(site), "html/body follows detected category");
   assert.ok(!/Brand Face/.test(site), "unknown face without fallback is not guessed");
@@ -248,6 +263,36 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   env = setup({ settings: { version: 4, editors: { protect: false } }, bf: BF, editor: true });
   await wait(400);
   assert.ok(!env.sheets()[0].includes("@scope"), "global switch turns protection off");
+
+  // custom mono font + editor: comma-separated extra selectors work, Visit 1 protects/learns, Visit 2 applies custom font from base sheet
+  env = setup({
+    settings: { version: 4, fonts: { mono: { mode: "custom", custom: "JetBrains Mono" } }, editors: { selectors: [".ed-a, .ed-b"] } },
+    bf: BF,
+    editor: true
+  });
+  await wait(500);
+  assert.ok(env.sheets()[0].includes("@scope (:root) to (") && env.sheets()[0].includes(".ed-a, .ed-b"), "comma-separated protected selector keeps @scope active");
+  assert.ok(!env.sheets()[1].includes('"Editor Only Mono"'), "Visit 1 does not swap editor font under running editor");
+  assert.ok(env.w.__sent.some(m => m.names.includes("Editor Only Mono")), "Visit 1 learns editor font");
+
+  // late stylesheet or late FontFace added while an editor is already mounted must also defer mono fonts instead of swapping mid-session
+  const lateEdStyle = env.w.document.createElement("style");
+  lateEdStyle.textContent = ".late-ed-box { font-family: 'Late Sheet Mono', monospace; }";
+  env.w.document.head.appendChild(lateEdStyle);
+  env.w.__fonts.push({ family: "Late JS Mono", weight: "400", style: "normal", stretch: "normal" });
+  await wait(400);
+  assert.ok(!env.sheets()[1].includes('"Late Sheet Mono"') && !env.sheets()[1].includes('"Late JS Mono"'), "late mono stylesheet/FontFace does not swap while editor is mounted");
+  assert.ok(env.w.__sent.some(m => m.names.includes("Late Sheet Mono")) && env.w.__sent.some(m => m.names.includes("Late JS Mono")), "late mono fonts are learned for next load");
+
+  // Visit 2 with custom mono font applies the learned editor font from base sheet at document_start
+  env = setup({
+    settings: { version: 4, fonts: { mono: { mode: "custom", custom: "JetBrains Mono" } } },
+    bf: BF,
+    hints: { "site.test": ["Editor Only Mono"] },
+    editor: true
+  });
+  await wait(500);
+  assert.ok(env.sheets()[0].includes('@font-face{font-family:"Editor Only Mono"') && env.sheets()[0].includes('local("JetBrains Mono")') && env.sheets()[0].includes("size-adjust:81.25%"), "Visit 2 applies user custom mono font cleanly from base sheet");
 
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

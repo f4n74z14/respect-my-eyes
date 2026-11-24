@@ -2,6 +2,7 @@
 (() => {
     "use strict";
 
+    const F = self.RME;
     const $ = id => document.getElementById(id);
 
     // Properties are assigned, everything else (aria-*, list, type...) goes through attributes
@@ -80,5 +81,23 @@
         const timer = setTimeout(close, undo ? 8000 : 2600);
     }
 
-    self.RME.ui = { $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, send: msg => chrome.runtime.sendMessage(msg) };
+    /*
+     * The extension follows its own rule: its pages use your fonts too. Content scripts do not run on chrome-extension://
+     * pages, so the fonts are applied here. Without a browser or custom font the system stack stays.
+     */
+    function applyFonts(settings, bf) {
+        const { fonts } = F.resolveFonts(settings, bf);
+        const root = document.documentElement;
+
+        for (const [prop, cat] of [["--font-ui", "sans"], ["--font-mono", "mono"]]) {
+            if (fonts[cat].source === "default") root.style.removeProperty(prop);
+            else root.style.setProperty(prop, F.familyValue(cat, fonts));
+        }
+        root.classList.add("ready");
+    }
+
+    // Never leave a page invisible if the settings fail to load
+    setTimeout(() => document.documentElement.classList.add("ready"), 800);
+
+    self.RME.ui = { applyFonts, $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, send: msg => chrome.runtime.sendMessage(msg) };
 })();

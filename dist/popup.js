@@ -2,7 +2,7 @@
     "use strict";
 
     const F = self.RME;
-    const { $, el, segmented, bindSwitch, toast } = F.ui;
+    const { $, el, segmented, bindSwitch, toast, applyFonts } = F.ui;
 
     const SITE_CATS = [["sans", "Sans"], ["serif", "Serif"], ["mono", "Mono"], ["ignore", "Icon"]];
     const BROWSER_STORES = new Set(["chromewebstore.google.com", "microsoftedge.microsoft.com"]);
@@ -159,6 +159,7 @@
 
     async function main() {
         ({ settings, bf } = await F.storage.load());
+        applyFonts(settings, bf);
 
         bindSwitch("enabled", settings.enabled, async on => {
             settings.enabled = on;

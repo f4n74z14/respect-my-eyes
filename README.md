@@ -17,6 +17,7 @@ Big thanks to the [Original Project](https://github.com/sysop84/force-my-browser
 - **Icons stay icons.** Icon fonts (Font Awesome, Material Symbols, emoji...) are detected and never replaced.
 - **Code editors keep their cursor.** Monaco, CodeMirror, Ace and xterm.js are recognised on their own, so the cursor and selection stay aligned with the text.
 - **Fix a site in two clicks.** The toolbar popup lists fonts it could not classify; pick a category and press Add.
+- **Practices what it preaches.** The popup and the settings page use your fonts too.
 - **Easy to correct.** Every destructive action in settings has an Undo, and settings can be exported and imported.
 - **Private.** No network requests, no analytics. Everything stays in your browser.
 
@@ -42,7 +43,8 @@ Needs a Chromium-based browser, version 118 or newer. Browsers that do not expos
 
 - **Fonts:** follow the browser or pick any installed font per family, with a live preview.
 - **Monospace:** font size and scaling, and whether text boxes use the monospace font.
-- **Extra fonts:** your own list of font names and their category. Filter, add, or paste a whole list with *Import list*.
+- **Protected areas:** code editors (on by default) and any element you want our style rules to stay out of.
+- **Extra fonts:** your own list of font names and their category. Filter, add, or paste a whole list with *Import list*. A listed font costs nothing on pages that do not use it, so the list can be as long as you like.
 - **Excluded sites**, **icon font keywords**, **backup**.
 
 ## Troubleshooting
@@ -51,16 +53,16 @@ Needs a Chromium-based browser, version 118 or newer. Browsers that do not expos
 Open the popup on that page. If the font is listed under *Needs your input*, add it as Sans, Serif or Mono. Fonts with no generic fallback (`font-family: BrandFace;` with no `sans-serif` after it) are the usual cause.
 
 **Icons turned into letters or boxes.**
-Open the popup, find the icon font, choose **Icon**, and reload the page. For a recurring pattern, add a word from its name under *Icon font keywords*. If one widget still looks wrong, add its container (for example `.mce-container`) under *Monospace > Protected areas*: our style rules never apply inside it. In DevTools, right-click the element, Copy, Copy selector.
+Open the popup, find the icon font, choose **Icon**, and reload the page. For a recurring pattern, add a word from its name under *Icon font keywords*. If one widget still looks wrong, add its container (for example `.mce-container`) under *Protected areas*: our style rules never apply inside it. In DevTools, right-click the element, Copy, Copy selector.
 
 **The cursor is in the wrong place in an editor or text box.**
 - Switch editor protection off and on again for the site in the popup, or reload the page.
 - Set *Monospace > Scaling* to *None* if the editor should keep exactly the size the site configured.
 - Keep *Monospace > Text boxes* off (the default): many sites mirror their text boxes.
-- An editor that is not detected can be added under *Monospace > Protected areas* with a CSS selector of its root element.
+- An editor that is not detected can be added under *Protected areas* with a CSS selector of its root element.
 
 **An editor still shows the site's font the first time.**
-The editor had already measured its font, so it is left alone and remembered. Reload the page and it uses your font from the first paint.
+The editor had already measured its font, so it is left alone and remembered for that site. Reload the page and it uses your font from the first paint.
 
 **The page looks wrong.**
 Turn the extension off for that site with the popup's site switch, or add the site under *Excluded sites*.

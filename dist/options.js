@@ -2,7 +2,7 @@
     "use strict";
 
     const F = self.RME;
-    const { $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, send } = F.ui;
+    const { $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, send, applyFonts } = F.ui;
 
     const BROWSER_KEY = { sans: "sansserif", serif: "serif", mono: "fixed" };
     const CAT_NAMES = { sans: "Sans", serif: "Serif", mono: "Mono", ignore: "Icon font" };
@@ -78,6 +78,8 @@
     }
 
     function renderPreview() {
+        applyFonts(settings, bf);       // the page itself follows the fonts being chosen
+
         const { fonts, monoSize } = F.resolveFonts(settings, bf);
 
         $("preview").replaceChildren(...F.CATS.map(cat => {
@@ -149,14 +151,10 @@
         reveal();
     }
 
-    const validSelector = sel => {
-        try { return !self.CSS || !CSS.supports || CSS.supports(`selector(${sel})`); } catch { return false; }
-    };
-
     function renderEditors() {
         const ed = settings.editors;
         const warn = () => {
-            const bad = ed.selectors.filter(s => !validSelector(s));
+            const bad = ed.selectors.filter(s => !F.validSelector(s));
             $("selHint").textContent = bad.length ? `Ignored, not a valid selector: ${bad.join(", ")}` : "";
         };
 

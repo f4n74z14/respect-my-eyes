@@ -57,6 +57,7 @@
         vars: [],                   // custom property overrides
         sampled: new Set(),
         sampledOnce: false,
+        initialDone: false,
         fontCount: -1,
         bodyCat: null,
         lastCss: null
@@ -147,6 +148,19 @@
         return C ? rule instanceof C : rule.type === RULE_TYPES[ctor];
     }
 
+    const hasEditor = () => lateNames.size > 0 || !!(cfg.protectSel && document.querySelector(cfg.protectSel));
+
+    function ruleTouchesEditor(sel) {
+        if (!cfg.protectSel || !sel || sel === "*" || VAR_SCOPE.test(sel)) return false;
+        try {
+            for (const el of document.querySelectorAll(sel)) {
+                if (inEditor(el)) return true;
+            }
+        }
+        catch { /* invalid selector in page stylesheet */ }
+        return false;
+    }
+
     // Custom properties holding a font stack (--font-body: ...) are overridden where they are defined
     function overrideCustomProps(rule) {
         const { style } = rule;
@@ -161,8 +175,9 @@
 
             const a = analyze(value);
             if (overridable(a)) {
-                registerNames(a);
-                decls += `${prop}:${familyOf(a.cat)}!important;`;
+                const defer = st.initialDone && hasEditor() && (a.cat === "mono" || a.names.some(n => n.cat === "mono"));
+                registerNames(a, defer);
+                if (!defer) decls += `${prop}:${familyOf(a.cat)}!important;`;
             }
         }
         if (decls) st.vars.push(`${rule.selectorText}{${decls}}`);
@@ -173,7 +188,9 @@
         const a = rule.style.fontFamily && analyze(rule.style.fontFamily);
 
         if (a) {
-            registerNames(a);
+            const hasMono = a.cat === "mono" || a.names.some(n => n.cat === "mono");
+            const defer = hasMono && hasEditor() && (st.initialDone || ruleTouchesEditor(sel));
+            registerNames(a, defer);
 
             /*
              * A named stack is already replaced by its name, which keeps the page's own cascade intact. Mirroring its
@@ -268,8 +285,14 @@
 
             const cat = F.classifyName(lower, cfg.matchers);
             if (isCat(cat) && !cfg.chosenLower.has(lower) && !st.faces.has(lower) && !lateNames.has(lower)) {
-                st.faces.set(lower, { name: family, cat });
-                changed = true;
+                if (cat === "mono" && !cfg.preFaces.has(lower) && st.initialDone && hasEditor()) {
+                    lateNames.set(lower, family);
+                    learnQueue.add(family);
+                }
+                else {
+                    st.faces.set(lower, { name: family, cat });
+                    changed = true;
+                }
             }
         });
         return changed;
@@ -405,7 +428,7 @@
             root = root.parentElement;
         }
 
-        const els = [root, ...[...root.querySelectorAll("*")].slice(0, 400)];
+        const els = [root, ...collectElements(root, 2000)];
         let added = false;
 
         for (const el of els) added = processElement(el, true) || added;
@@ -457,9 +480,11 @@
 
         const changed = scanDocument() | readPageFaces();      // not ||: both must run
 
+        flushLearn();
         if (changed || st.lastCss === null || !st.bodyCat) rebuild();
         if (changed) deleteFontFaces();
         if (changed || !st.sampledOnce) sample();
+        st.initialDone = true;
     }
 
     let listening = false;
@@ -493,16 +518,12 @@
     // Configuration
     // ---------------------------------------------------------------------------------------------------------------
 
-    const validSelector = sel => {
-        try { return !self.CSS || !CSS.supports || CSS.supports(`selector(${sel})`); } catch { return false; }
-    };
-
     // Editors are found automatically (RME.editorBoundary); needs @scope and :has(), i.e. Chrome 118+
     function editorSelector(editors) {
         if (!editors.protect || matchesHosts(editors.offSites) || typeof CSSScopeRule === "undefined") return "";
 
-        const sel = F.editorBoundary(editors.selectors.filter(validSelector));
-        return validSelector(sel) ? sel : "";
+        const sel = F.editorBoundary(editors.selectors.filter(F.validSelector));
+        return F.validSelector(sel) ? sel : "";
     }
 
     function turnOff(reason) {
