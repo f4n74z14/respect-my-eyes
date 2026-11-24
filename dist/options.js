@@ -73,8 +73,8 @@
 
         $("bfStatus").previousElementSibling.className = `dot ${ok ? "ok" : "warn"}`;
         $("bfStatus").textContent = ok
-            ? "Following your browser's font settings. Choose Custom to override a family."
-            : "Browser font settings are unavailable here, so defaults are used. Choose Custom to set your fonts.";
+            ? "Using browser font settings. Choose Custom to override."
+            : "Browser fonts unavailable; using defaults. Choose Custom to override.";
     }
 
     function renderPreview() {
@@ -155,7 +155,7 @@
         const ed = settings.editors;
         const warn = () => {
             const bad = ed.selectors.filter(s => !F.validSelector(s));
-            $("selHint").textContent = bad.length ? `Ignored, not a valid selector: ${bad.join(", ")}` : "";
+            $("selHint").textContent = bad.length ? `Invalid selector (ignored): ${bad.join(", ")}` : "";
         };
 
         bindSwitch("edProtect", ed.protect, v => { ed.protect = v; save(); });
@@ -357,7 +357,7 @@
                 const next = F.normalizeSettings(JSON.parse(await file.text()));
                 withUndo("Settings imported", () => { settings = next; });
             }
-            catch { toast("That is not a valid settings file"); }
+            catch { toast("Invalid settings file"); }
         };
 
         $("resetAll").onclick = () => withUndo("Settings reset", () => { settings = F.normalizeSettings(null); });

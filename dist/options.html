@@ -18,7 +18,7 @@
 
 <main>
     <h1>Settings</h1>
-    <p class="muted intro">Changes are saved automatically and applied to open tabs. If a page does not change, reload it.</p>
+    <p class="muted intro">Saved automatically and applied to open tabs. Reload pages that don't update.</p>
 
     <section id="general">
         <h2>General</h2>
@@ -29,7 +29,7 @@
             </div>
             <div class="setting stack">
                 <div class="title">Excluded sites</div>
-                <div class="hint">One per line, e.g. example.com. Subdomains and embedded frames are included. <span id="exCount"></span></div>
+                <div class="hint">One per line (e.g. example.com). Includes subdomains and frames. <span id="exCount"></span></div>
                 <textarea id="excluded" rows="3" spellcheck="false" aria-label="Excluded sites"></textarea>
             </div>
         </div>
@@ -43,7 +43,7 @@
             <datalist id="installed"></datalist>
             <div class="preview" id="preview" aria-label="Preview"></div>
             <div class="card-footer">
-                <span class="hint">Your browser's own font settings live on a separate page.</span>
+                <span class="hint">Browser font settings open in a separate tab.</span>
                 <div class="cluster">
                     <button id="refreshBf">Re-read</button>
                     <button id="openBrowserFonts">Open browser settings</button>
@@ -56,21 +56,21 @@
         <h2>Monospace</h2>
         <div class="card">
             <div class="setting">
-                <div class="text"><div class="title">Font size</div><div class="hint">Applied to code blocks. Editors are left alone.</div></div>
+                <div class="text"><div class="title">Font size</div><div class="hint">Applies to code blocks, not editors.</div></div>
                 <div class="controls">
                     <div class="seg" id="sizeSeg" role="radiogroup" aria-label="Font size source"></div>
                     <span class="reveal" id="sizeNum"><input type="number" id="customSize" min="6" max="72" step="0.5" aria-label="Custom size in pixels"> px</span>
                 </div>
             </div>
             <div class="setting">
-                <div class="text"><div class="title">Scaling</div><div class="hint">Shrinks named monospace fonts (Consolas, Menlo...) to match the browser's own monospace size.</div></div>
+                <div class="text"><div class="title">Scaling</div><div class="hint">Scales named monospace fonts (Consolas, Menlo...) to match your browser monospace size.</div></div>
                 <div class="controls">
                     <div class="seg" id="scaleSeg" role="radiogroup" aria-label="Scaling"></div>
                     <span class="reveal" id="scaleNum"><input type="number" id="customScale" min="25" max="200" step="0.25" aria-label="Custom scale in percent"> %</span>
                 </div>
             </div>
             <div class="setting">
-                <div class="text"><div class="title">Text boxes</div><div class="hint">Use the monospace font in &lt;textarea&gt;. Can misplace the cursor on sites that mirror their text boxes.</div></div>
+                <div class="text"><div class="title">Text boxes</div><div class="hint">Use monospace in &lt;textarea&gt;. May misalign mirrored text boxes.</div></div>
                 <label class="switch"><input type="checkbox" id="textarea" aria-label="Monospace in text boxes"><span></span></label>
             </div>
         </div>
@@ -80,16 +80,16 @@
         <h2>Protected areas</h2>
         <div class="card">
             <div class="setting">
-                <div class="text"><div class="title">Code editors</div><div class="hint">Found automatically. Their font size and spacing are never forced, and the font they already use is not swapped under them.</div></div>
+                <div class="text"><div class="title">Code editors</div><div class="hint">Auto-detected. Keeps size and alignment untouched, and remembers late fonts for the next load.</div></div>
                 <label class="switch"><input type="checkbox" id="edProtect" aria-label="Protect code editors"><span></span></label>
             </div>
             <div class="setting">
-                <div class="text"><div class="title">Auto-reload once for new editors</div><div class="hint">When a site reveals a new editor font on first visit, reload the tab once automatically so your font applies immediately.</div></div>
-                <label class="switch"><input type="checkbox" id="edAutoReload" aria-label="Auto-reload once for new editors"><span></span></label>
+                <div class="text"><div class="title">Auto-reload for new editors</div><div class="hint">Reloads the tab once on first visit when a new editor font is found.</div></div>
+                <label class="switch"><input type="checkbox" id="edAutoReload" aria-label="Auto-reload for new editors"><span></span></label>
             </div>
             <div class="setting stack">
                 <div class="title">Other elements</div>
-                <div class="hint">Our style rules never apply inside these. One CSS selector per line, e.g. <code>.mce-container</code>. In DevTools: right-click the element, Copy, Copy selector. For an editor that is not detected, or a widget that looks wrong.</div>
+                <div class="hint">Excluded from font rules. One CSS selector per line (e.g. <code>.mce-container</code>).</div>
                 <textarea id="edSelectors" rows="3" spellcheck="false" placeholder=".mce-container&#10;#my-editor" aria-label="Protected elements"></textarea>
                 <div class="hint warn" id="selHint" role="alert"></div>
             </div>
@@ -99,7 +99,7 @@
     <section id="extra">
         <h2>Extra fonts</h2>
         <div class="card pad">
-            <p class="hint flush">For fonts that cannot be detected automatically, such as a font stack without a generic fallback. Use the name exactly as the site does.</p>
+            <p class="hint flush">Fonts that can't be auto-detected (e.g. without a generic fallback). Match the site's exact name.</p>
             <div class="toolbar">
                 <input type="search" id="filter" class="grow" placeholder="Filter" aria-label="Filter fonts" hidden>
                 <span id="count" class="hint grow"></span>
@@ -113,10 +113,10 @@
             </form>
             <details class="adv spaced">
                 <summary>Icon font keywords</summary>
-                <div class="hint">A font whose name contains one of these words is never replaced. Built in: icon, awesome, glyph, symbol, emoji and more. One per line.</div>
+                <div class="hint">Matching fonts are never replaced (built in: icon, awesome, glyph, symbol, emoji...). One per line.</div>
                 <textarea id="iconPatterns" rows="3" spellcheck="false" aria-label="Icon font keywords"></textarea>
             </details>
-            <div class="card-footer"><span class="hint">Back to the built-in list of fonts.</span><button id="resetManual" class="ghost danger">Restore defaults</button></div>
+            <div class="card-footer"><span class="hint">Reset to built-in font list.</span><button id="resetManual" class="ghost danger">Restore defaults</button></div>
         </div>
     </section>
 
@@ -124,11 +124,11 @@
         <h2>Backup</h2>
         <div class="card">
             <div class="setting">
-                <div class="text"><div class="title">Settings file</div><div class="hint">Move your configuration to another browser.</div></div>
+                <div class="text"><div class="title">Settings file</div><div class="hint">Transfer settings between browsers.</div></div>
                 <div class="controls"><button id="export">Export</button><button id="import">Import</button></div>
             </div>
             <div class="setting">
-                <div class="text"><div class="title">Reset everything</div><div class="hint">Back to factory settings. You can undo it right after.</div></div>
+                <div class="text"><div class="title">Reset everything</div><div class="hint">Restore factory defaults (undoable).</div></div>
                 <button id="resetAll" class="danger">Reset</button>
             </div>
             <input type="file" id="importFile" accept="application/json" hidden>
@@ -140,7 +140,7 @@
     <form method="dialog" id="impForm">
         <div class="dlg-head">
             <h3 id="impTitle">Import fonts</h3>
-            <p class="hint flush">One font per line. Add a category after <code>|</code>: sans, serif, mono or ignore. Lines without one use the default below.</p>
+            <p class="hint flush">One per line, optional <code>| sans</code>, <code>serif</code>, <code>mono</code>, or <code>ignore</code>.</p>
         </div>
         <div class="dlg-body">
             <textarea id="impText" rows="6" spellcheck="false" placeholder="Gotham | sans&#10;Fira Code | mono&#10;Wingdings | ignore&#10;Some Font" aria-label="Fonts to import"></textarea>

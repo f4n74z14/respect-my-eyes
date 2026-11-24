@@ -12,7 +12,7 @@
 
     const save = () => F.storage.save(settings);
 
-    function needsReload(text = "Reload the page to apply this.", persist = false) {
+    function needsReload(text = "Reload to apply changes.", persist = false) {
         if (persist) baseBanner = text;
         $("bannerText").textContent = text;
         $("banner").hidden = false;
@@ -61,7 +61,7 @@
             settings.excludedSites = settings.excludedSites.filter(x => !drop.has(x));
             if (!enable) {
                 settings.excludedSites.push(host);
-                needsReload("Reload the page to see its original fonts.");
+                needsReload("Reload to restore original fonts.");
             }
             else restoreBanner();
             await save();
@@ -91,7 +91,7 @@
                     setTimeout(() => { card.remove(); $("attention").hidden = !$("unknown").children.length; }, 180);
 
                     toast(`Added \u201c${name}\u201d as ${SITE_CATS.find(c => c[0] === category)[1].toLowerCase()}`);
-                    if (category === "ignore") needsReload("Reload the page to bring the icon font back.", true);
+                    if (category === "ignore") needsReload("Reload to restore icon font.", true);
                 }
             });
 
@@ -129,7 +129,7 @@
             if (!protect) protection.offSites.push(host);
 
             await save();
-            needsReload(protect ? "Reload the page to protect its editors." : "Reload the page for a clean result.", true);
+            needsReload(protect ? "Reload to protect editors." : "Reload to apply change.", true);
         });
         $("edSwitch").disabled = !protection.protect;
 
@@ -138,7 +138,7 @@
             bindSwitch("edAutoReload", protection.autoReload, async auto => {
                 protection.autoReload = auto;
                 await save();
-                toast(auto ? "New editor sites will reload once automatically" : "Auto-reload turned off");
+                toast(auto ? "Auto-reload on for new editors" : "Auto-reload off");
             });
         }
 
@@ -151,10 +151,10 @@
         $("editors").replaceChildren(
             ...(protection.protect ? [] : [el("div", "hint", "Editor protection is off in Settings.")]),
             ...editors.map(({ sample, count }) => row(text(el("code", "", sample, { title: sample })), count > 1 ? [el("span", "hint", `\u00d7${count}`)] : [])),
-            ...late.map(name => row(text(el("div", "", name), "Saved from an editor on this page. Reload once so it measures your font."), [el("span", "badge browser", "Remembered")]))
+            ...late.map(name => row(text(el("div", "", name)), [el("span", "badge browser", "Remembered")]))
         );
 
-        if (late.length) needsReload("Editor font saved \u2014 reload once to apply your font.", true);
+        if (late.length) needsReload("Reload once to use your font in editors.", true);
     }
 
     // Where the extension cannot run, and what to tell the user
@@ -165,10 +165,10 @@
         $("note").hidden = false;
 
         if (web) {      // a tab that was open before the extension was installed, enabled, or updated
-            $("note").textContent = "The extension is not running on this page yet. Font replacement will work after you reload the page.";
-            needsReload("Reload the page to apply font replacement.", true);
+            $("note").textContent = "Extension not running yet \u2014 fonts replace after reload.";
+            needsReload("Reload this page to start.", true);
         }
-        else $("note").textContent = "Browser pages and the Web Store can't be changed by extensions.";
+        else $("note").textContent = "Browser pages and the Web Store can't be changed.";
 
         return web ? url.hostname : "";
     }
@@ -182,8 +182,8 @@
             settings.enabled = on;
             await save();
             $("app").classList.toggle("off", !on);
-            if (!on) needsReload("Reload the page to restore its original fonts.");
-            else if (!initialEnabled) needsReload("Reload the page to apply your fonts.");
+            if (!on) needsReload("Reload to restore original fonts.");
+            else if (!initialEnabled) needsReload("Reload to apply your fonts.");
             else restoreBanner();
         });
         $("app").classList.toggle("off", !settings.enabled);

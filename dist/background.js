@@ -88,7 +88,7 @@ function setBadge(tabId, active) {
             if (chrome.action.setBadgeBackgroundColor) chrome.action.setBadgeBackgroundColor({ tabId, color: "#EBCB8B" });
             if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ tabId, color: "#2E3440" });
             if (chrome.action.setBadgeText) chrome.action.setBadgeText({ tabId, text: "!" });
-            if (chrome.action.setTitle) chrome.action.setTitle({ tabId, title: "Respect My Eyes — Reload once to apply your font in code editors" });
+            if (chrome.action.setTitle) chrome.action.setTitle({ tabId, title: "Respect My Eyes \u2014 Reload to apply font in editors" });
         }
         else {
             if (chrome.action.setBadgeText) chrome.action.setBadgeText({ tabId, text: "" });
