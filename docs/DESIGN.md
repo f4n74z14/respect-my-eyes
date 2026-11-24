@@ -6,7 +6,7 @@ What the extension does, how, and what each decision costs. Behaviour is covered
 
 | File | Role |
 | --- | --- |
-| `dist/manifest.json` | Manifest V3. Permissions: `storage`, `fontSettings`. One content script on all URLs and frames, at `document_start`. |
+| `dist/manifest.json` | Manifest V3. Permissions: `storage`, `fontSettings`, `activeTab`. One content script on all URLs and frames, at `document_start`. |
 | `dist/background.js` | Service worker. Reads `chrome.fontSettings`, caches it, migrates old storage keys, learns editor fonts per site, tracks per-tab newly learned fonts (`rme:pageStart` / `rme:tabState`), shows a `"!"` badge when a reload is needed, and performs opt-in one-shot tab auto-reload (`editors.autoReload`). |
 | `dist/content.js` | Page script. Scans, classifies, and injects the override CSS. Sends `rme:pageStart` from the top frame and `rme:learn` from any frame that discovers an editor monospace font late. |
 | `dist/common.js` | Shared pure logic: classification, settings (`editors.autoReload` included), CSS builders, selector-list validation. Touches `chrome.*` only in `RME.storage`. |

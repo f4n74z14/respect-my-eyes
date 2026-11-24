@@ -209,9 +209,14 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.strictEqual(p.$("note").hidden, false);
   assert.ok(p.$("site").hidden && p.$("banner").hidden, "no site switch on browser pages");
 
-  // a normal page that was open before the extension started: say so and offer a reload
+  // manifest grants activeTab so tabs.query exposes tab.url when the popup opens on an already-open tab
+  const manifest = JSON.parse(fs.readFileSync(path.join(dist, "manifest.json"), "utf8"));
+  assert.ok(Array.isArray(manifest.permissions) && manifest.permissions.includes("activeTab"), "manifest includes activeTab for already-open tab URL detection");
+
+  // a normal page that was open before the extension started/enabled: say so and offer a reload
   p = await page("popup.html", { report: undefined });
-  assert.ok(/not running/.test(p.$("note").textContent) && p.$("banner").hidden === false);
+  assert.ok(/not running/.test(p.$("note").textContent) && /reload/i.test(p.$("note").textContent) && p.$("banner").hidden === false);
+  assert.ok(!/Browser pages/.test(p.$("note").textContent), "does not misidentify an already-open web page as a browser page");
   assert.ok(p.$("site").hidden, "no site switch where the extension is not running");
 
   // web stores: http(s), but extensions cannot run there

@@ -164,9 +164,9 @@
 
         $("note").hidden = false;
 
-        if (web) {      // a tab that was open before the extension was installed or updated
-            $("note").textContent = "The extension is not running on this page yet.";
-            needsReload("Reload the page to start it.", true);
+        if (web) {      // a tab that was open before the extension was installed, enabled, or updated
+            $("note").textContent = "The extension is not running on this page yet. Font replacement will work after you reload the page.";
+            needsReload("Reload the page to apply font replacement.", true);
         }
         else $("note").textContent = "Browser pages and the Web Store can't be changed by extensions.";
 
@@ -225,7 +225,7 @@
         if (report) host = report.host;
         else {
             let url = null;
-            try { url = new URL(tab.url); } catch { /* no access to the url */ }
+            try { url = new URL(tab && (tab.url || tab.pendingUrl)); } catch { /* no access to the url */ }
             host = explainNoReport(url);
         }
 
