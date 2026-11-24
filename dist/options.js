@@ -59,7 +59,7 @@
     function renderGeneral() {
         const showCount = () => { $("exCount").textContent = settings.excludedSites.length ? `(${settings.excludedSites.length} listed)` : ""; };
 
-        bindSwitch("enabled", settings.enabled, v => { settings.enabled = v; save(); });
+        bindSwitch("enabled", settings.enabled, v => { settings.enabled = v; saveNow(); });
         bindLines("excluded", settings.excludedSites, lines => { settings.excludedSites = F.cleanHostList(lines); showCount(); save(); });
         showCount();
     }
@@ -94,27 +94,26 @@
 
     function renderFonts() {
         $("fontRows").replaceChildren(...F.CATS.map(cat => {
-            const font = settings.fonts[cat];
             const label = F.CAT_LABEL[cat];
             const browserName = bf && bf.available ? bf[BROWSER_KEY[cat]] : "";
 
-            const mode = select([["browser", `Browser (${browserName || "unavailable"})`], ["custom", "Custom"]], font.mode, { "aria-label": `${label} source` });
-            const input = el("input", "fade", null, { type: "text", list: "installed", placeholder: "Installed font name", value: font.custom, "aria-label": `Custom ${label} font` });
+            const mode = select([["browser", `Browser (${browserName || "unavailable"})`], ["custom", "Custom"]], settings.fonts[cat].mode, { "aria-label": `${label} source` });
+            const input = el("input", "fade", null, { type: "text", list: "installed", placeholder: "Installed font name", value: settings.fonts[cat].custom, "aria-label": `Custom ${label} font` });
 
             const sync = () => {
-                input.disabled = font.mode !== "custom";
+                input.disabled = settings.fonts[cat].mode !== "custom";
                 input.classList.toggle("hide", input.disabled);
             };
             sync();
 
             mode.onchange = () => {
-                font.mode = mode.value;
+                settings.fonts[cat].mode = mode.value;
                 sync();
                 if (!input.disabled) input.focus();
                 renderPreview();
-                save();
+                saveNow();
             };
-            input.oninput = () => { font.custom = F.cleanFontName(input.value); renderPreview(); save(); };
+            input.oninput = () => { settings.fonts[cat].custom = F.cleanFontName(input.value); renderPreview(); save(); };
 
             const row = el("div", "font-row");
             row.append(el("span", "label", label), mode, input);
@@ -137,30 +136,28 @@
     // -----------------------------------------------------------------------------------------------------------------
 
     function renderMono() {
-        const m = settings.mono;
         const reveal = () => {
-            $("sizeNum").classList.toggle("show", m.sizeMode === "custom");
-            $("scaleNum").classList.toggle("show", m.scaleMode === "custom");
+            $("sizeNum").classList.toggle("show", settings.mono.sizeMode === "custom");
+            $("scaleNum").classList.toggle("show", settings.mono.scaleMode === "custom");
         };
 
-        segmented($("sizeSeg"), [["browser", "Browser"], ["custom", "Custom"], ["off", "Off"]], m.sizeMode, v => { m.sizeMode = v; reveal(); renderPreview(); save(); });
-        segmented($("scaleSeg"), [["auto", "Auto"], ["custom", "Custom"], ["off", "None"]], m.scaleMode, v => { m.scaleMode = v; reveal(); save(); });
-        bindNumber("customSize", m.customSize, 13, v => { m.customSize = v; renderPreview(); save(); });
-        bindNumber("customScale", m.customScale, 81.25, v => { m.customScale = v; save(); });
-        bindSwitch("textarea", m.textarea, v => { m.textarea = v; save(); });
+        segmented($("sizeSeg"), [["browser", "Browser"], ["custom", "Custom"], ["off", "Off"]], settings.mono.sizeMode, v => { settings.mono.sizeMode = v; reveal(); renderPreview(); saveNow(); });
+        segmented($("scaleSeg"), [["auto", "Auto"], ["custom", "Custom"], ["off", "None"]], settings.mono.scaleMode, v => { settings.mono.scaleMode = v; reveal(); saveNow(); });
+        bindNumber("customSize", settings.mono.customSize, 13, v => { settings.mono.customSize = v; renderPreview(); save(); });
+        bindNumber("customScale", settings.mono.customScale, 81.25, v => { settings.mono.customScale = v; save(); });
+        bindSwitch("textarea", settings.mono.textarea, v => { settings.mono.textarea = v; saveNow(); });
         reveal();
     }
 
     function renderEditors() {
-        const ed = settings.editors;
         const warn = () => {
-            const bad = ed.selectors.filter(s => !F.validSelector(s));
+            const bad = settings.editors.selectors.filter(s => !F.validSelector(s));
             $("selHint").textContent = bad.length ? `Invalid selector (ignored): ${bad.join(", ")}` : "";
         };
 
-        bindSwitch("edProtect", ed.protect, v => { ed.protect = v; save(); });
-        bindSwitch("edAutoReload", ed.autoReload, v => { ed.autoReload = v; save(); });
-        bindLines("edSelectors", ed.selectors, lines => { ed.selectors = F.cleanSelectors(lines); warn(); save(); });
+        bindSwitch("edProtect", settings.editors.protect, v => { settings.editors.protect = v; saveNow(); });
+        bindSwitch("edAutoReload", settings.editors.autoReload, v => { settings.editors.autoReload = v; saveNow(); });
+        bindLines("edSelectors", settings.editors.selectors, lines => { settings.editors.selectors = F.cleanSelectors(lines); warn(); save(); });
         warn();
     }
 

@@ -7,17 +7,17 @@ const dist = path.join(__dirname, "..", "dist");
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const BF = { available: true, standard: "Times New Roman", serif: "Georgia", sansserif: "Verdana", fixed: "Consolas", fixedSize: 13, defaultSize: 16 };
 
+let sharedStore = { rmeBrowserFonts: BF };
 async function page(file, { report, tabState, url = "https://site.test/", bf = BF } = {}) {
   const read = f => fs.readFileSync(path.join(dist, f), "utf8");
   const html = read(file);
   const w = new JSDOM(html.replace(/<script src="[^"]+"><\/script>/g, ""), { runScripts: "outside-only", url: "chrome-extension://x/" + file }).window;
   w.self = w;
   w.Element.prototype.scrollIntoView = function () {};   // missing in jsdom
-  const store = { rmeBrowserFonts: bf };
   const created = [], events = [];
   w.close = () => { events.push("close"); };
   w.chrome = {
-    storage: { local: { get: () => Promise.resolve({ ...store }), set: (o, cb) => { Object.assign(store, o); cb && cb(); return Promise.resolve(); } }, onChanged: { addListener() {} } },
+    storage: { local: { get: () => Promise.resolve(JSON.parse(JSON.stringify(sharedStore))), set: (o, cb) => { Object.assign(sharedStore, JSON.parse(JSON.stringify(o))); cb && cb(); return Promise.resolve(); } }, onChanged: { addListener() {} } },
     runtime: {
       sendMessage: async m => {
         if (m && m.type === "rme:tabState") return tabState || { learned: [], hosts: [] };
@@ -36,7 +36,7 @@ async function page(file, { report, tabState, url = "https://site.test/", bf = B
   // load the scripts in the order the page lists them, like the browser does
   for (const [, src] of html.matchAll(/<script src="([^"]+)"><\/script>/g)) w.eval(read(src));
   await wait(150);
-  return { w, d: w.document, store, created, events, $: id => w.document.getElementById(id), ev: (n, t) => t.dispatchEvent(new w.Event(n, { bubbles: true, cancelable: true })) };
+  return { w, d: w.document, store: sharedStore, created, events, $: id => w.document.getElementById(id), ev: (n, t) => t.dispatchEvent(new w.Event(n, { bubbles: true, cancelable: true })) };
 }
 const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
 
@@ -121,14 +121,18 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.ok(!fonts(o.store).some(f => f.name === "Plain Name"), "import can be undone");
   assert.strictEqual(fonts(o.store).find(f => f.name === "Poppins").category, "sans");
 
-  // segmented controls, switches, selector validation
+  // segmented controls, switches, selector validation & persistence
   o.$("sizeSeg").children[1].click(); await wait(300);
   assert.strictEqual(o.store.rmeSettings.mono.sizeMode, "custom");
   assert.ok(o.$("sizeNum").classList.contains("show"), "custom size slides in");
   o.$("textarea").checked = true; o.ev("change", o.$("textarea")); await wait(300);
   assert.strictEqual(o.store.rmeSettings.mono.textarea, true);
   o.$("edAutoReload").checked = true; o.ev("change", o.$("edAutoReload")); await wait(300);
-  assert.strictEqual(o.store.rmeSettings.editors.autoReload, true);
+  assert.strictEqual(o.store.rmeSettings.editors.autoReload, true, "edAutoReload setting is saved immediately");
+  // verify persistence across simulated reload / new page instance loading from storage
+  const o2 = await page("options.html");
+  assert.strictEqual(o2.$("edAutoReload").checked, true, "edAutoReload switch state persists from storage on reload");
+
   o.$("edProtect").checked = false; o.ev("change", o.$("edProtect")); await wait(300);
   assert.strictEqual(o.store.rmeSettings.editors.protect, false);
   o.$("edSelectors").value = ".my-editor\n:::bad"; o.ev("input", o.$("edSelectors")); await wait(300);
@@ -155,7 +159,9 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.strictEqual(p.$("edSwitch").checked, true);
   assert.strictEqual(p.$("edAutoReload").checked, false);
   p.$("edAutoReload").checked = true; p.ev("change", p.$("edAutoReload")); await wait(50);
-  assert.strictEqual(p.store.rmeSettings.editors.autoReload, true, "popup can toggle auto-reload");
+  assert.strictEqual(sharedStore.rmeSettings.editors.autoReload, true, "popup can toggle auto-reload");
+  const p2 = await page("popup.html", { report });
+  assert.strictEqual(p2.$("edAutoReload").checked, true, "popup edAutoReload setting persists from storage");
 
   // one switch for the whole site
   p.$("edSwitch").checked = false; p.ev("change", p.$("edSwitch")); await wait(50);
@@ -190,13 +196,14 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   await wait(60);
   assert.deepStrictEqual(p.events, ["reload:1", "close"], "reload button awaits tabs.reload before closing the popup");
 
-  // subframe-only learned editor font (like Monaco Playground preview iframe) is surfaced via rme:tabState
+  // subframe-only learned editor fonts (like Monaco Playground preview iframe) are surfaced via rme:tabState without repeating hints
   p = await page("popup.html", {
-    report: { host: "microsoft.github.io", active: true, reason: "", protect: true, siteOff: false, deferred: [], unknown: [], editors: [] },
-    tabState: { learned: ["Iframe Editor Mono"], hosts: ["isolated-playground.github.io"] }
+    report: { host: "microsoft.github.io", active: true, reason: "", protect: true, siteOff: false, deferred: ["Iframe Mono A"], unknown: [], editors: [] },
+    tabState: { learned: ["Iframe Mono A", "Iframe Mono B"], hosts: ["isolated-playground.github.io"] }
   });
   assert.strictEqual(p.$("editorsBox").hidden, false, "subframe learned font opens Code editors section");
-  assert.ok(p.$("editors").textContent.includes("Iframe Editor Mono") && p.$("editors").textContent.includes("Remembered"));
+  assert.ok(p.$("editors").textContent.includes("Iframe Mono A") && p.$("editors").textContent.includes("Iframe Mono B"));
+  assert.ok(p.$("editors").textContent.includes("Remembered") && !p.$("editors").textContent.includes("Saved from an editor"), "no repetitive hint per remembered font");
   assert.strictEqual(p.$("banner").hidden, false, "subframe learned font shows reload banner");
 
   // without a usable browser font the system stack stays

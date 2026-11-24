@@ -135,8 +135,8 @@
 
         if ($("edAutoRow")) {
             $("edAutoRow").hidden = !protection.protect;
-            bindSwitch("edAutoReload", protection.autoReload, async auto => {
-                protection.autoReload = auto;
+            bindSwitch("edAutoReload", settings.editors.autoReload, async auto => {
+                settings.editors.autoReload = auto;
                 await save();
                 toast(auto ? "Auto-reload on for new editors" : "Auto-reload off");
             });
