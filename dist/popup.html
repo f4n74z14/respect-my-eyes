@@ -15,24 +15,33 @@
 <div id="banner" class="banner" hidden><span id="bannerText">Reload to apply changes.</span><button id="reload" class="primary sm">Reload</button></div>
 
 <div id="app">
-    <div id="site" class="site" hidden>
-        <div class="text"><div class="host" id="host"></div><div class="hint" id="siteHint"></div></div>
-        <label class="switch" title="Use on this site"><input type="checkbox" id="siteOn" aria-label="Use on this site"><span></span></label>
+    <div id="site" class="card" hidden>
+        <div class="setting">
+            <div class="text"><div class="host" id="host"></div><div class="hint" id="siteHint"></div></div>
+            <label class="switch" title="Use on this site"><input type="checkbox" id="siteOn" aria-label="Use on this site"><span></span></label>
+        </div>
     </div>
     <div id="note" hidden></div>
 
-
-    <h2>Fonts</h2>
-    <div id="fonts"></div>
+    <section>
+        <h2>Fonts</h2>
+        <div id="fonts"></div>
+    </section>
 
     <section id="attention" hidden><h2>Needs your input</h2><div id="unknown"></div></section>
     <section id="editorsBox" hidden>
-        <div class="h-row"><h2>Code editors</h2><label class="switch" title="Protect editors on this site"><input type="checkbox" id="edSwitch" aria-label="Protect editors on this site"><span></span></label></div>
-        <div id="editors"></div>
-        <div class="ed-opt" id="edAutoRow" hidden>
-            <span>Auto-reload for new editors</span>
-            <label class="switch" title="Reload once on first visit when a new editor font is found"><input type="checkbox" id="edAutoReload" aria-label="Auto-reload for new editors"><span></span></label>
+        <h2>Code editors</h2>
+        <div class="card ed-controls">
+            <div class="setting">
+                <div class="text"><div class="title">Protect on this site</div></div>
+                <label class="switch" title="Protect editors on this site"><input type="checkbox" id="edSwitch" aria-label="Protect editors on this site"><span></span></label>
+            </div>
+            <div class="setting" id="edAutoRow" hidden>
+                <div class="text"><div class="title">Auto-reload for new editors</div></div>
+                <label class="switch" title="Reload once on first visit when a new editor font is found"><input type="checkbox" id="edAutoReload" aria-label="Auto-reload for new editors"><span></span></label>
+            </div>
         </div>
+        <div id="editors"></div>
     </section>
 </div>
 

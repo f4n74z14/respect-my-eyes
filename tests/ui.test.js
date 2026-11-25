@@ -299,5 +299,11 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.ok(p.$("toasts").textContent.includes("500"), "shows limit warning instead of falsely claiming font was added");
   assert.strictEqual(p.$("unknown").children.length, 1, "card is kept when 500-font cap prevents saving");
 
+  // UI.md consistency: all in-body popup switches sit in .card > .setting rows and Settings footer stays pinned outside scrollable #app
+  const appSwitches = [...p.$("app").querySelectorAll("label.switch")];
+  assert.ok(appSwitches.length === 3 && appSwitches.every(sw => sw.closest(".card > .setting")), "all in-body popup switches use unified .card > .setting alignment");
+  assert.strictEqual(p.d.querySelector("footer").closest("#app"), null, "footer sits outside scrollable #app");
+  assert.ok(/#app\s*\{[^}]*overflow-y:\s*auto/.test(cssPopup) && /footer\s*\{[^}]*flex:\s*none/.test(cssPopup), "popup scrolls #app while pinning Settings footer");
+
   console.log("ui.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

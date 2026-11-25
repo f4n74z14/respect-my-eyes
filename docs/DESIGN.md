@@ -1,6 +1,6 @@
 # Design snapshot
 
-What the extension does, how, and what each decision costs. Behaviour is covered by the tests in `tests/`.
+What the extension does, how, and what each decision costs. Behaviour is covered by the tests in `tests/`. UI layout, toggle placement, spacing tokens, and heavy-site bounds are specified in `UI.md`.
 
 ## Components
 
@@ -11,8 +11,8 @@ What the extension does, how, and what each decision costs. Behaviour is covered
 | `dist/content.js` | Page script. Scans, classifies, and injects the override CSS. Sends `rme:pageStart` from the top frame and `rme:learn` from any frame that discovers an editor monospace font late. |
 | `dist/common.js` | Shared pure logic: classification, settings (`editors.autoReload` included), CSS builders, unified selector-list scanning (`scanSelectorList`). Touches `chrome.*` only in `RME.storage` (serialized write queue to preserve toggle order). |
 | `dist/ui.js` | DOM helpers shared by the popup and settings page, including `refreshBrowserFonts()`. Applies the user's sans and mono fonts to those pages via `--font-ui` / `--font-mono` plus `local()` `@font-face` aliases (`__rme_ui_sans`, `__rme_ui_mono`) so local/PostScript font names resolve too. Without a browser or custom font the system stack stays. |
-| `dist/popup.*`, `dist/options.*` | Popup and settings page. Both keep fonts and controls in sync on `storage.onChanged`, guard against stale own-write echoes, flush pending debounced writes on `pagehide`, refresh missing browser fonts, and expose the `editors.autoReload` toggle; the popup keeps the reload banner interactive above `#app.off`, awaits `chrome.tabs.reload()` before closing, and merges `rme:tabState` from iframes. |
-| `dist/ui.css` | Shared styles (Nord palette, light and dark), applying `--font-ui` and `--font-mono` across controls and monospace elements (`code`, `pre`, `kbd`, `samp`, `textarea`). Page-specific styles are in `popup.css` and `options.css`. |
+| `dist/popup.*`, `dist/options.*` | Popup and settings page following `UI.md`. Both keep fonts and controls in sync on `storage.onChanged`, guard against stale own-write echoes, flush pending debounced writes on `pagehide`, refresh missing browser fonts, and expose the `editors.autoReload` toggle; the popup keeps the reload banner interactive above `#app.off`, pins `header`/`footer` outside the scrollable `#app`, awaits `chrome.tabs.reload()` before closing, and merges `rme:tabState` from iframes. |
+| `dist/ui.css` | Shared styles (Nord palette, light and dark) and radius/layout tokens (`UI.md`), applying `--font-ui` and `--font-mono` across controls and monospace elements (`code`, `pre`, `kbd`, `samp`, `textarea`). Page-specific styles are in `popup.css` and `options.css`. |
 
 Storage (`chrome.storage.local`): `rmeSettings` (user settings), `rmeBrowserFonts` (cache of the browser's font preferences, written by the service worker) and `rmeHints` (monospace fonts that editors used, per site). Keys from older builds (`settings`, `browserFonts`) are migrated on update.
 
