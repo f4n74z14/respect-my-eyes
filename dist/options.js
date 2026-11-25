@@ -2,7 +2,7 @@
     "use strict";
 
     const F = self.RME;
-    const { $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, applyFonts, refreshBrowserFonts } = F.ui;
+    const { $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, applyFonts, refreshBrowserFonts, animDelay } = F.ui;
 
     const BROWSER_KEY = { sans: "sansserif", serif: "serif", mono: "fixed" };
     const CAT_NAMES = { sans: "Sans", serif: "Serif", mono: "Mono", ignore: "Icon font" };
@@ -263,8 +263,10 @@
             const i = key ? findManual(key) : -1;
             if (i === -1) return;
             const name = settings.manualFonts[i].name;
+            const delay = animDelay(160);
+            if (!delay) { withUndo(`Removed ${quoted(name)}`, () => removeManual(key)); return; }
             row.classList.add("removing");
-            setTimeout(() => withUndo(`Removed ${quoted(name)}`, () => removeManual(key)), 160);
+            setTimeout(() => withUndo(`Removed ${quoted(name)}`, () => removeManual(key)), delay);
         };
 
         $("addForm").onsubmit = e => {

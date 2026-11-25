@@ -37,3 +37,18 @@ Pages near content-script caps (hundreds of fonts, long obfuscated names, or doz
 - **Overflow protection**: Long text slots (`.name`, `.host`, `.face`, `.ed code`) must carry `min-width: 0`, ellipsis truncation, and a `title` tooltip with the full string. Badges, switches, and counts must set `flex: none; white-space: nowrap;` and `font-variant-numeric: tabular-nums`.
 - **Bounded scroll regions**: `#unknown` (`max-height: 220px`), `#editors` (`max-height: 165px`), `.list` (`max-height: 320px`), and `#impPreview` (`max-height: 190px`) isolate vertical scrolling with `overscroll-behavior: contain` and `scrollbar-width: thin`.
 - **Rendering & input limits**: Use `content-visibility: auto` on list rows (`.list-row`, `.card2`, `.ed`), `contain: layout style` on `.list`, `.switch`, and options `section`s, cap rendered import preview rows (`200` valid, `100` invalid), cap invalid selector error lists, and check storage limits (e.g., 500 `manualFonts`) before showing positive confirmation toasts.
+
+## 5. Motion & Reduced Motion
+
+All UI transitions must be symmetric between open/show and close/hide states and never trap users behind leftover delays:
+
+- **Timing tokens**: Use `--fast` (`150ms`), `--slow` (`220ms`), and `--ease` (`cubic-bezier(.2, .8, .2, 1)`). Avoid arbitrary one-off durations.
+- **Symmetric open + close**:
+  - Top-layer `<dialog>` and `dialog::backdrop` must animate both opening and closing via `@starting-style` and `transition-behavior: allow-discrete`.
+  - `.banner[hidden]` pairs `[hidden] { display: none !important; }` with `allow-discrete` + `@starting-style` so both showing and dismissing animate cleanly while `.hidden` stays synchronous in JS.
+  - `<details class="adv">` uses progressive `interpolate-size: allow-keywords` + `::details-content` transitions for smooth expand and collapse.
+  - `.fade` (open) resets `visibility` delay to `0s` while `.fade.hide` (close) delays `visibility: hidden` by `--fast`, ensuring opacity fades smoothly in both directions.
+  - JS-removed items (`.toast.out`, `.list-row.removing`, `.card2.gone`) must match `--fast` (`150ms`) with a `160ms` timeout via `F.ui.animDelay(160)` so exit animations are never clipped.
+- **`prefers-reduced-motion: reduce`**:
+  - CSS zeroes `transition-duration`, `transition-delay`, `animation-duration`, and `animation-delay` (`.001ms` / `0s`) and sets `html { scroll-behavior: auto; }` so hidden/delayed states resolve immediately.
+  - JS exit timers use `F.ui.animDelay()`, returning `0` under `prefers-reduced-motion: reduce` to remove dismissed elements immediately without phantom waits.

@@ -2,7 +2,7 @@
     "use strict";
 
     const F = self.RME;
-    const { $, el, segmented, bindSwitch, toast, applyFonts, refreshBrowserFonts } = F.ui;
+    const { $, el, segmented, bindSwitch, toast, applyFonts, refreshBrowserFonts, animDelay } = F.ui;
 
     const SITE_CATS = [["sans", "Sans"], ["serif", "Serif"], ["mono", "Mono"], ["ignore", "Icon"]];
     const BROWSER_STORES = new Set(["chromewebstore.google.com", "microsoftedge.microsoft.com"]);
@@ -95,8 +95,10 @@
                     settings.manualFonts = F.cleanManual(next);
                     await save();
 
-                    card.classList.add("gone");
-                    setTimeout(() => { card.remove(); $("attention").hidden = !$("unknown").children.length; }, 180);
+                    const finishRemove = () => { card.remove(); $("attention").hidden = !$("unknown").children.length; };
+                    const delay = animDelay(160);
+                    if (!delay) finishRemove();
+                    else { card.classList.add("gone"); setTimeout(finishRemove, delay); }
 
                     toast(`Added \u201c${name}\u201d as ${SITE_CATS.find(c => c[0] === category)[1].toLowerCase()}`);
                     if (category === "ignore") needsReload("Reload to restore icon font.", true);

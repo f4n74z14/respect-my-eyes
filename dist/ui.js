@@ -64,14 +64,19 @@
         $(id).oninput = () => onChange($(id).value.split(/\r?\n/));
     };
 
+    const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const animDelay = (ms = 160) => reducedMotion() ? 0 : ms;
+
     // Short message, optionally with an Undo button, in the #toasts container
     function toast(message, undo) {
         const box = $("toasts");
         const node = el("div", "toast", null, { role: "status" });
         const close = () => {
             clearTimeout(timer);
+            const delay = animDelay(160);
+            if (!delay) { node.remove(); return; }
             node.classList.add("out");
-            setTimeout(() => node.remove(), 200);
+            setTimeout(() => node.remove(), delay);
         };
 
         node.append(el("span", "", message));
@@ -142,5 +147,5 @@
         catch { return null; }
     }
 
-    self.RME.ui = { applyFonts, $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, send, refreshBrowserFonts };
+    self.RME.ui = { applyFonts, $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, send, refreshBrowserFonts, animDelay };
 })();

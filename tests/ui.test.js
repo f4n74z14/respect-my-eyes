@@ -305,5 +305,12 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.strictEqual(p.d.querySelector("footer").closest("#app"), null, "footer sits outside scrollable #app");
   assert.ok(/#app\s*\{[^}]*overflow-y:\s*auto/.test(cssPopup) && /footer\s*\{[^}]*flex:\s*none/.test(cssPopup), "popup scrolls #app while pinning Settings footer");
 
+  // UI.md motion & reduced motion: symmetric open/close transitions and zero-delay reduced motion
+  assert.ok(/@starting-style/.test(cssUi) && /allow-discrete/.test(cssUi), "dialog and banner animate both open and close cleanly");
+  assert.ok(/\.fade\s*\{[^}]*visibility\s+0s\s+0s/.test(cssUi) && /\.fade\.hide\s*\{[^}]*visibility\s+0s\s+var\(--fast\)/.test(cssUi), ".fade only delays visibility on close, not open");
+  assert.ok(/prefers-reduced-motion:\s*reduce[\s\S]*transition-delay:\s*0s\s*!important/.test(cssUi), "reduced motion zeroes transition and animation delays");
+  p.w.matchMedia = q => ({ matches: /prefers-reduced-motion:\s*reduce/.test(q) });
+  assert.strictEqual(p.w.RME.ui.animDelay(160), 0, "animDelay skips exit timers when reduced motion is preferred");
+
   console.log("ui.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

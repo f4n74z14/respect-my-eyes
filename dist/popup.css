@@ -6,7 +6,7 @@ h2 { margin: 0 0 6px; }
 header, .banner, footer { position: relative; z-index: 2; pointer-events: auto; }
 .banner { flex: none; margin: 0 14px 10px; }
 
-#app { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 14px 14px; display: flex; flex-direction: column; gap: 14px; scrollbar-width: thin; transition: opacity .2s; }
+#app { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 14px 14px; display: flex; flex-direction: column; gap: 14px; scrollbar-width: thin; transition: opacity var(--fast) var(--ease); }
 #app.off { opacity: .45; pointer-events: none; }
 
 #app .card { padding: 0 12px; }
@@ -24,7 +24,7 @@ header, .banner, footer { position: relative; z-index: 2; pointer-events: auto; 
 .font-item .face { flex: 1; min-width: 0; font-size: 14px; }
 .font-item .badge { flex: none; }
 
-.card2 { padding: 9px 12px 10px; animation: fade-in .2s ease; transition: opacity .18s, transform .18s; content-visibility: auto; contain-intrinsic-size: auto 66px; }
+.card2 { padding: 9px 12px 10px; animation: fade-in var(--fast) var(--ease); transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease); content-visibility: auto; contain-intrinsic-size: auto 66px; }
 .card2.gone { opacity: 0; transform: translateX(12px); }
 .card2 .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .card2 .name { font-weight: 600; flex: 1; min-width: 0; }
