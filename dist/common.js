@@ -119,9 +119,11 @@
     const GENERIC_CAT = {
         "serif": "serif", "sans-serif": "sans", "monospace": "mono",
         "system-ui": "sans", "ui-serif": "serif", "ui-sans-serif": "sans", "ui-monospace": "mono", "ui-rounded": "sans",
+        "-apple-system": "sans", "blinkmacsystemfont": "sans",
         "cursive": null, "fantasy": null, "math": null, "emoji": null, "fangsong": null
     };
     const PURE_GENERICS = { "serif": 1, "sans-serif": 1, "monospace": 1 };
+    const isReservedFamily = lower => Object.hasOwn(GENERIC_CAT, lower);
 
     // Values we must never touch
     const SKIP_VALUE = /\b(initial|inherit|unset|revert(-layer)?)\b|var\s*\(|[=&]|^a$/i;
@@ -224,8 +226,11 @@
             names.push({ name: t.name, lower: t.lower, cat, inferred });
         }
 
-        const cat = names.length ? (names[0].cat === "icon" ? "skip" : names[0].cat) : genericCat;
-        return { names, cat, pure, unknown: names.length && !names[0].cat ? names[0].name : null };
+        const t0 = tokens[0];
+        const firstGeneric = !!(t0 && t0.generic && !PURE_GENERICS[t0.lower] && GENERIC_CAT[t0.lower]);
+        const cat = firstGeneric ? GENERIC_CAT[t0.lower]
+            : (names.length ? (names[0].cat === "icon" ? "skip" : names[0].cat) : genericCat);
+        return { names, cat, pure, firstGeneric, unknown: names.length && !names[0].cat ? names[0].name : null };
     }
 
     // Does a custom property value (--font-foo: ...) look like a font stack?
@@ -612,7 +617,7 @@
         normalizeSettings, resolveFonts, storage, isExcluded,
         addHints, HINT_LIMITS, cleanFontName, cleanHostList, cleanSelectors, cleanNameList, cleanManual, parseFontLines,
         // font names
-        norm, cssQuote, buildMatchers, classifyName, splitFamilies, analyzeStack, looksLikeFontStack,
+        norm, cssQuote, isReservedFamily, buildMatchers, classifyName, splitFamilies, analyzeStack, looksLikeFontStack,
         // css
         editorBoundary, splitSelectorList, dropSweeps, validSelector, familyValue, fontFaceCss, fontFaceExtraCss, isStandardFace, monoRule, monoDefaultsCss
     };

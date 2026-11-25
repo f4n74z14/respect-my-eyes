@@ -164,7 +164,9 @@
     function renderEditors() {
         const warn = () => {
             const bad = settings.editors.selectors.filter(s => !F.validSelector(s));
-            $("selHint").textContent = bad.length ? `Invalid selector (ignored): ${bad.join(", ")}` : "";
+            $("selHint").textContent = bad.length
+                ? `Invalid selector (ignored): ${bad.slice(0, 3).join(", ")}${bad.length > 3 ? ` (+${bad.length - 3} more)` : ""}`
+                : "";
         };
 
         bindSwitch("edProtect", settings.editors.protect, v => { settings.editors.protect = v; saveNow(); });
@@ -272,6 +274,10 @@
             if (!entry) return;
 
             const existed = findManual(F.norm(entry.name)) > -1;
+            if (!existed && settings.manualFonts.length >= 500) {
+                toast("Font list limit (500) reached");
+                return;
+            }
 
             $("filter").value = "";
             applyEntries([entry]);
@@ -319,7 +325,7 @@
                 el("span", "name", e.name),
                 el("span", `badge${e.category === "ignore" ? "" : " browser"}`, CAT_NAMES[e.category]),
                 el("span", `badge${e.state === "update" ? " custom" : ""}`, STATE_LABEL[e.state]))),
-            ...invalid.map(x => row(
+            ...invalid.slice(0, 100).map(x => row(
                 el("span", "name", `Line ${x.line}: ${x.text}`, { title: x.text }),
                 el("span", "hint warn", x.reason)))
         );

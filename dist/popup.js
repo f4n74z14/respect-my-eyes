@@ -83,7 +83,16 @@
             const add = el("button", "primary sm", "Add", {
                 type: "button",
                 async onclick() {
-                    settings.manualFonts = F.cleanManual([...settings.manualFonts, { name, category }]);
+                    const key = F.norm(name);
+                    const idx = settings.manualFonts.findIndex(f => F.norm(f.name) === key);
+                    if (idx === -1 && settings.manualFonts.length >= 500) {
+                        toast("Font list limit (500) reached");
+                        return;
+                    }
+                    const next = idx > -1
+                        ? settings.manualFonts.map((f, i) => i === idx ? { name: f.name, category } : f)
+                        : [...settings.manualFonts, { name, category }];
+                    settings.manualFonts = F.cleanManual(next);
                     await save();
 
                     card.classList.add("gone");
@@ -146,7 +155,7 @@
         $("editors").replaceChildren(
             ...(protectOn ? [] : [el("div", "hint", "Editor protection is off in Settings.")]),
             ...editors.map(({ sample, count }) => row(text(el("code", "", sample, { title: sample })), count > 1 ? [el("span", "hint", `\u00d7${count}`)] : [])),
-            ...late.map(name => row(text(el("div", "", name)), [el("span", "badge browser", "Remembered")]))
+            ...late.map(name => row(text(el("div", "name", name, { title: name })), [el("span", "badge browser", "Remembered")]))
         );
 
         if (late.length) needsReload("Reload once to use your font in editors.", true);

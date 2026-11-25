@@ -38,7 +38,12 @@ t("splits families respecting quotes", () => {
 t("analyzes stacks", () => {
     let r = a('-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Apple Color Emoji", sans-serif');
     assert.strictEqual(r.cat, "sans");
+    assert.strictEqual(r.firstGeneric, true);
+    assert.ok(!r.names.some(x => x.lower === "-apple-system" || x.lower === "blinkmacsystemfont"), "reserved system generics are never treated as overridable font faces");
     assert.strictEqual(r.names.find(x => x.lower === "apple color emoji").cat, "icon");
+    assert.strictEqual(a("-apple-system, BlinkMacSystemFont").cat, "sans");
+    assert.strictEqual(a("-apple-system, BlinkMacSystemFont").pure, false);
+    assert.ok(F.isReservedFamily("-apple-system") && F.isReservedFamily("blinkmacsystemfont") && F.isReservedFamily("system-ui"));
 
     r = a("Arial, monospace");                         // contradictory stack: first family wins
     assert.strictEqual(r.cat, "sans");

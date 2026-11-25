@@ -329,5 +329,14 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.ok(!env.sheets()[1].includes("color:red") && !env.sheets()[1].includes("--font-evil"), "escaped custom property CSS injection blocked");
   assert.strictEqual(manyFaces.sheet.cssRules.length, 0, "overridden @font-face batch removed cleanly");
 
+  // --- 10. Reserved system keywords (-apple-system, BlinkMacSystemFont) are never emitted as @font-face rules ---
+  const sysStyle = env.w.document.createElement("style");
+  sysStyle.textContent = '.apple-btn { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; } .quoted-sys { font-family: "-apple-system", sans-serif; }';
+  env.w.document.head.appendChild(sysStyle);
+  await wait(350);
+  const sysCss = env.sheets()[1];
+  assert.ok(!/@font-face\{font-family:"-apple-system"/i.test(sysCss) && !/@font-face\{font-family:"BlinkMacSystemFont"/i.test(sysCss), "no invalid/reserved @font-face generated for -apple-system or BlinkMacSystemFont");
+  assert.ok(sysCss.includes(".apple-btn") && sysCss.includes('font-family:"Verdana", sans-serif!important'), "selector starting with -apple-system is mirrored directly");
+
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

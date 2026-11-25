@@ -286,5 +286,18 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   p = await page("popup.html", { report: { host: "x.test", active: true, protect: true, siteOff: false, deferred: [], unknown: [], editors: [] } });
   assert.ok(p.$("attention").hidden && p.$("editorsBox").hidden, "empty sections stay hidden");
 
+  // heavy site near limits: long font names truncate cleanly, scroll bounds exist in CSS, and 500-font cap does not lie
+  assert.ok(/#unknown\s*\{[^}]*max-height:/.test(cssPopup) && /#editors\s*\{[^}]*max-height:/.test(cssPopup), "popup caps heavy lists with internal scrolling");
+  const longName = "VeryLongObfuscatedEditorFontNameWithoutSpaces_" + "x".repeat(60);
+  sharedStore.rmeSettings = { version: 4, manualFonts: Array.from({ length: 500 }, (_, i) => ({ name: `Cap Font ${i}`, category: "sans" })) };
+  p = await page("popup.html", {
+    report: { host: "heavy.test", active: true, protect: true, siteOff: false, deferred: [longName], unknown: [{ name: "New Heavy Font", count: 4200 }], editors: [] }
+  });
+  assert.strictEqual(p.$("editors").querySelector(".name").getAttribute("title"), longName, "long remembered editor font gets ellipsis class and full tooltip");
+  p.$("unknown").querySelector("button.primary").click();
+  await wait(30);
+  assert.ok(p.$("toasts").textContent.includes("500"), "shows limit warning instead of falsely claiming font was added");
+  assert.strictEqual(p.$("unknown").children.length, 1, "card is kept when 500-font cap prevents saving");
+
   console.log("ui.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

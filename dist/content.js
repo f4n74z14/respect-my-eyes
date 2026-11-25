@@ -140,7 +140,7 @@
      * @return true when a face was added to st.faces
      */
     function registerFace(name, lower, cat, defer) {
-        if (!isCat(cat) || cfg.chosenLower.has(lower) || st.faces.has(lower) || lateNames.has(lower)) return false;
+        if (!isCat(cat) || F.isReservedFamily(lower) || cfg.chosenLower.has(lower) || st.faces.has(lower) || lateNames.has(lower)) return false;
 
         if (defer && cat === "mono" && !cfg.preFaces.has(lower)) {
             if (lateNames.size < LIMITS.learnPerPage) {
@@ -242,7 +242,7 @@
              * ".mce-container *". So selectors are mirrored only where a name cannot be replaced: stacks made of
              * generic families (system-ui...), and monospace stacks, for the forced size.
              */
-            if (overridable(a) && safeRuleSelector(sel) && sel[0] !== "*" && (a.cat === "mono" || !a.names.length) && st.sel[a.cat].size < LIMITS.selPerCat) {
+            if (overridable(a) && safeRuleSelector(sel) && sel[0] !== "*" && (a.cat === "mono" || !a.names.length || a.firstGeneric) && st.sel[a.cat].size < LIMITS.selPerCat) {
                 const safe = F.dropSweeps(sel);
                 if (safe) st.sel[a.cat].add(safe);
             }
@@ -713,8 +713,10 @@
         try {
             document.querySelectorAll(rootSel).forEach(add);
 
-            for (const input of [...document.querySelectorAll(F.EDITOR_PROXY)].slice(0, 50)) {
+            let checked = 0;
+            for (const input of document.querySelectorAll(F.EDITOR_PROXY)) {
                 if (!input.closest(rootSel) && (isMono(input) || isMono(input.parentElement))) add(input.parentElement || input);
+                if (++checked >= 50) break;
             }
         }
         catch { /* invalid user selector */ }
@@ -724,11 +726,14 @@
 
     // Font stacks on the page that could not be classified and have no generic fallback, most used first
     function findUnknownFonts() {
+        const root = document.body || document.documentElement;
+        if (!root) return [];
+
         const counts = new Map();
 
-        for (const el of collectElements(document.body || document.documentElement, REPORT_LIMIT)) {
+        for (const el of collectElements(root, REPORT_LIMIT)) {
             const ff = getComputedStyle(el).fontFamily;
-            counts.set(ff, (counts.get(ff) || 0) + 1);
+            if (ff && ff.length <= LIMITS.valueLen) counts.set(ff, (counts.get(ff) || 0) + 1);
         }
 
         const unknown = new Map();
