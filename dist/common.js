@@ -126,9 +126,11 @@
     // Values we must never touch
     const SKIP_VALUE = /\b(initial|inherit|unset|revert(-layer)?)\b|var\s*\(|[=&]|^a$/i;
 
-    function norm(name) { return String(name).trim().replace(/\s+/g, " ").toLowerCase(); }
+    const DEFAULT_ICON_RE = new RegExp(ICON_SRC.join("|"), "i");
 
-    function cssQuote(name) { return '"' + String(name).replace(/[\\"\r\n]/g, "") + '"'; }
+    function norm(name) { return (typeof name === "string" ? name : String(name)).trim().replace(/\s+/g, " ").toLowerCase(); }
+
+    function cssQuote(name) { return '"' + String(name).replace(/[\x00-\x1f\x7f\\"]/g, "") + '"'; }
 
     function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
@@ -136,10 +138,15 @@
         const manual = new Map();
         (settings.manualFonts || []).forEach(function (f) { manual.set(norm(f.name), f.category); });
 
-        const icon = ICON_SRC.slice();
-        (settings.iconPatterns || []).forEach(function (p) { if (p) icon.push(escapeRe(String(p).toLowerCase())); });
+        const extras = settings.iconPatterns;
+        let icon = DEFAULT_ICON_RE;
+        if (extras && extras.length) {
+            const parts = ICON_SRC.slice();
+            for (let i = 0; i < extras.length; i++) if (extras[i]) parts.push(escapeRe(String(extras[i]).toLowerCase()));
+            if (parts.length > ICON_SRC.length) icon = new RegExp(parts.join("|"), "i");
+        }
 
-        return { icon: new RegExp(icon.join("|"), "i"), manual: manual };
+        return { icon: icon, manual: manual };
     }
 
     // @return "icon" | "sans" | "serif" | "mono" | null
@@ -153,29 +160,31 @@
         return null;
     }
 
-    // Split a font-family value on top-level commas
+    // Split a font-family value on top-level commas using index slices (avoids char-by-char string concat)
     function splitFamilies(value) {
-        const parts = [];
-        let cur = "", quote = "";
+        const out = [];
+        let start = 0, quote = "";
+
+        const pushPart = p => {
+            if (out.length >= 64) return;
+            let t = p.trim();
+            if (t.includes("!")) t = t.replace(/\s*!important$/i, "");
+            if (!t) return;
+            const c0 = t.charCodeAt(0);
+            const quoted = (c0 === 34 || c0 === 39) && t.charCodeAt(t.length - 1) === c0 && t.length >= 2;
+            const name = quoted ? t.slice(1, -1).trim() : t;
+            if (!name) return;
+            const lower = norm(name);
+            out.push({ name, lower, generic: !quoted && Object.hasOwn(GENERIC_CAT, lower) });
+        };
 
         for (let i = 0; i < value.length; i++) {
             const ch = value[i];
-            if (quote) { cur += ch; if (ch === quote) quote = ""; }
-            else if (ch === '"' || ch === "'") { quote = ch; cur += ch; }
-            else if (ch === ",") { parts.push(cur); cur = ""; }
-            else cur += ch;
+            if (quote) { if (ch === quote) quote = ""; }
+            else if (ch === '"' || ch === "'") quote = ch;
+            else if (ch === ",") { pushPart(value.slice(start, i)); start = i + 1; if (out.length >= 64) return out; }
         }
-        parts.push(cur);
-
-        const out = [];
-        parts.forEach(function (p) {
-            const t = p.trim().replace(/\s*!important$/i, "");
-            if (!t) return;
-            const q = /^(["'])(.*)\1$/.exec(t);
-            const name = q ? q[2].trim() : t;
-            const lower = norm(name);
-            out.push({ name: name, lower: lower, generic: !q && Object.prototype.hasOwnProperty.call(GENERIC_CAT, lower) });
-        });
+        pushPart(value.slice(start));
         return out;
     }
 
@@ -199,27 +208,24 @@
         if (!tokens.length) return null;
 
         let genericCat = null, pure = true;
-        tokens.forEach(function (t) {
+        for (const t of tokens) {
             if (t.generic) {
                 if (GENERIC_CAT[t.lower]) genericCat = GENERIC_CAT[t.lower];
                 if (!PURE_GENERICS[t.lower]) pure = false;
             }
             else pure = false;
-        });
+        }
 
         const names = [];
-        tokens.forEach(function (t) {
-            if (t.generic) return;
+        for (const t of tokens) {
+            if (t.generic) continue;
             let cat = classifyName(t.lower, m), inferred = false;
             if (!cat && genericCat) { cat = genericCat; inferred = true; }
-            names.push({ name: t.name, lower: t.lower, cat: cat, inferred: inferred });
-        });
+            names.push({ name: t.name, lower: t.lower, cat, inferred });
+        }
 
-        let cat;
-        if (names.length) cat = names[0].cat === "icon" ? "skip" : names[0].cat;
-        else cat = genericCat;
-
-        return { names: names, cat: cat, pure: pure, unknown: names.length && !names[0].cat ? names[0].name : null };
+        const cat = names.length ? (names[0].cat === "icon" ? "skip" : names[0].cat) : genericCat;
+        return { names, cat, pure, unknown: names.length && !names[0].cat ? names[0].name : null };
     }
 
     // Does a custom property value (--font-foo: ...) look like a font stack?
@@ -237,7 +243,7 @@
     // Settings
     // -----------------------------------------------------------------------------------------------------------------
 
-    function clone(o) { return JSON.parse(JSON.stringify(o)); }
+    const clone = typeof structuredClone === "function" ? o => structuredClone(o) : o => JSON.parse(JSON.stringify(o));
 
     function num(v, def, min, max) {
         v = parseFloat(v);
@@ -260,22 +266,25 @@
         return out;
     }
 
-    // Splits a selector list on top-level commas (not those inside (), [] or quotes)
-    function splitSelectorList(text) {
+    // Splits a selector list on top-level commas (not those inside (), [] or quotes) and checks delimiter balance
+    function scanSelectorList(text) {
+        const s = String(text || "");
         const parts = [];
-        let depth = 0, quote = "", current = "";
+        let depth = 0, quote = "", start = 0;
 
-        for (const ch of text) {
+        for (let i = 0; i < s.length; i++) {
+            const ch = s[i];
             if (quote) { if (ch === quote) quote = ""; }
             else if (ch === '"' || ch === "'") quote = ch;
-            else if ("([".includes(ch)) depth++;
-            else if (")]".includes(ch)) depth--;
-            else if (ch === "," && depth === 0) { parts.push(current.trim()); current = ""; continue; }
-            current += ch;
+            else if (ch === "(" || ch === "[") depth++;
+            else if (ch === ")" || ch === "]") { if (--depth < 0) return { parts: [], balanced: false, hasEmpty: true }; }
+            else if (ch === "," && depth === 0) { parts.push(s.slice(start, i).trim()); start = i + 1; }
         }
-        parts.push(current.trim());
-        return parts.filter(Boolean);
+        parts.push(s.slice(start).trim());
+        return { parts, balanced: depth === 0 && !quote, hasEmpty: parts.some(p => !p) };
     }
+
+    const splitSelectorList = text => scanSelectorList(text).parts.filter(Boolean);
 
     // A selector ending in "*" sweeps over every descendant, icon elements included, so it is never mirrored
     const dropSweeps = text => splitSelectorList(text).filter(s => !/(^|[\s>+~])\*$/.test(s)).join(",");
@@ -288,33 +297,25 @@
         sel = String(sel || "").trim();
         if (!sel || /[{};@\\]/.test(sel)) return false;
 
-        const parts = [];
-        let depth = 0, quote = "", cur = "";
-
-        for (const ch of sel) {
-            if (quote) { if (ch === quote) quote = ""; }
-            else if (ch === '"' || ch === "'") quote = ch;
-            else if ("([".includes(ch)) depth++;
-            else if (")]".includes(ch)) { if (--depth < 0) return false; }
-            else if (ch === "," && depth === 0) { parts.push(cur.trim()); cur = ""; continue; }
-            cur += ch;
-        }
-        parts.push(cur.trim());
-        if (depth !== 0 || quote || parts.some(function (p) { return !p; })) return false;
+        const { parts, balanced, hasEmpty } = scanSelectorList(sel);
+        if (!balanced || hasEmpty) return false;
 
         try {
             if (typeof CSS === "undefined" || !CSS.supports) return true;
-            return parts.every(function (p) { return CSS.supports("selector(:is(" + p + "))"); });
+            return parts.every(p => CSS.supports(`selector(:is(${p}))`));
         }
         catch { return false; }
     }
 
-    // Font names end up inside CSS strings, so quotes and backslashes are dropped
-    function cleanFontName(x) { return String(x || "").trim().replace(/["\\]/g, "").slice(0, 120); }
+    const BANNED_HOST_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+    // Font names end up inside CSS strings, so quotes, backslashes and control chars are dropped
+    function cleanFontName(x) { return String(x || "").trim().replace(/[\x00-\x1f\x7f"\\]/g, "").slice(0, 120); }
 
     function cleanHost(h) {
-        return String(h || "").trim().toLowerCase()
-            .replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/^\*\./, "").replace(/[\/?#].*$/, "").replace(/:\d+$/, "");
+        const cleaned = String(h || "").trim().toLowerCase()
+            .replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/^\*\./, "").replace(/[\/?#].*$/, "").replace(/:\d+$/, "").slice(0, 253);
+        return cleaned && !BANNED_HOST_KEYS.has(cleaned) ? cleaned : "";
     }
 
     // User-typed CSS selectors: reject anything that could break out of a selector
@@ -328,7 +329,7 @@
         return name && MANUAL_CATS.includes(f.category) ? { name: name, category: f.category } : null;
     }
 
-    const cleanHostList = list => uniqueList(list, cleanHost, null, Infinity);
+    const cleanHostList = list => uniqueList(list, cleanHost, null, 2000);
     const cleanSelectors = list => uniqueList(list, cleanSelector, null, 40);
     const cleanNameList = list => uniqueList(list, cleanFontName, norm, 200);
     const cleanManual = list => uniqueList(list, cleanManualFont, f => norm(f.name), 500);
@@ -345,23 +346,24 @@
      */
     function parseFontLines(text, defCat) {
         const map = new Map(), invalid = [];
+        const lines = String(text || "").split(/\r?\n/, 5000);
 
-        String(text || "").split(/\r?\n/).forEach(function (line, i) {
-            const raw = line.trim();
-            if (!raw || raw.charAt(0) === "#") return;
+        for (let i = 0; i < lines.length; i++) {
+            const raw = lines[i].trim();
+            if (!raw || raw.charAt(0) === "#") continue;
 
             const parts = raw.split(/\s*[|\t]\s*/);
             const name = cleanFontName(parts[0].replace(/^["']|["']$/g, ""));
             let category = defCat;
 
-            if (!name) { invalid.push({ line: i + 1, text: raw, reason: "Empty name" }); return; }
+            if (!name) { invalid.push({ line: i + 1, text: raw, reason: "Empty name" }); continue; }
 
             if (parts.length > 1 && parts[1].trim()) {
                 category = CAT_ALIASES[parts[1].trim().toLowerCase()];
-                if (!category) { invalid.push({ line: i + 1, text: raw, reason: "Unknown category \"" + parts[1].trim() + "\"" }); return; }
+                if (!category) { invalid.push({ line: i + 1, text: raw, reason: "Unknown category \"" + parts[1].trim() + "\"" }); continue; }
             }
             map.set(norm(name), { name: name, category: category });
-        });
+        }
         return { entries: Array.from(map.values()), invalid: invalid };
     }
 
@@ -404,7 +406,7 @@
 
         if (Array.isArray(raw.manualFonts)) s.manualFonts = cleanManual(raw.manualFonts);
         if (Array.isArray(raw.iconPatterns)) {
-            s.iconPatterns = raw.iconPatterns.map(function (p) { return String(p).trim(); }).filter(Boolean).slice(0, 200);
+            s.iconPatterns = raw.iconPatterns.map(p => String(p).trim().slice(0, 80)).filter(Boolean).slice(0, 200);
         }
         return s;
     }
@@ -522,7 +524,8 @@
         const weight = String(d.weight), style = String(d.style), stretch = String(d.stretch || "normal");
         const b = weightBounds(weight);
 
-        if (!b || !/^[\d.\s]+$|^(normal|bold)$/.test(weight) || !/^[a-z0-9 .\-]+$/i.test(style) || !/^[a-z0-9 .%\-]+$/i.test(stretch)) return "";
+        if (!b || weight.length > 40 || style.length > 40 || stretch.length > 40 ||
+            !/^[\d.\s]+$|^(normal|bold)$/.test(weight) || !/^[a-z0-9 .\-]+$/i.test(style) || !/^[a-z0-9 .%\-]+$/i.test(stretch)) return "";
 
         const fam = cssQuote(family), adjust = adjustDecl(cat, scalePct);
         const italic = /^(italic|oblique)/i.test(style);
@@ -562,12 +565,15 @@
         host = cleanHostList([host])[0];
         if (!host) return null;
 
-        const current = hints && hints[host] || [];
-        const merged = cleanNameList([...current, ...names]).slice(0, HINT_LIMITS.names);
+        const safeHints = hints && typeof hints === "object" ? hints : null;
+        const current = safeHints && Object.hasOwn(safeHints, host) && Array.isArray(safeHints[host])
+            ? cleanNameList(safeHints[host]) : [];
+        const list = Array.isArray(names) ? names : [];
+        const merged = cleanNameList([...current, ...list]).slice(0, HINT_LIMITS.names);
 
         if (merged.length === current.length) return null;
 
-        const next = { ...hints };
+        const next = { ...safeHints };
         delete next[host];                      // re-insert last: object keys keep insertion order
         next[host] = merged;
 
@@ -575,13 +581,22 @@
         return next;
     }
 
-    // chrome.storage.local access shared by the content script, service worker, popup and options page
+    // chrome.storage.local access shared by the content script, service worker, popup and options page.
+    // Writes execute immediately when idle and serialize when overlapping so rapid toggles never commit out of order.
+    let saveChain = null;
     const storage = {
         async load() {
             const data = await chrome.storage.local.get([KEYS.settings, KEYS.fonts, KEYS.hints]);
             return { settings: normalizeSettings(data[KEYS.settings]), bf: data[KEYS.fonts] || null, hints: data[KEYS.hints] || {} };
         },
-        save(settings) { return chrome.storage.local.set({ [KEYS.settings]: settings }); },
+        save(settings) {
+            const snapshot = normalizeSettings(settings);
+            const write = () => chrome.storage.local.set({ [KEYS.settings]: snapshot });
+            const p = (saveChain ? saveChain.catch(() => {}).then(write) : Promise.resolve(write()))
+                .finally(() => { if (saveChain === p) saveChain = null; });
+            saveChain = p;
+            return p;
+        },
         // fn(changes) runs when the settings or the cached browser fonts changed
         onChange(fn) {
             chrome.storage.onChanged.addListener((changes, area) => {

@@ -14,10 +14,28 @@ async function page(file, { report, tabState, url = "https://site.test/", bf = B
   const w = new JSDOM(html.replace(/<script src="[^"]+"><\/script>/g, ""), { runScripts: "outside-only", url: "chrome-extension://x/" + file }).window;
   w.self = w;
   w.Element.prototype.scrollIntoView = function () {};   // missing in jsdom
-  const created = [], events = [];
+  const created = [], events = [], storageListeners = [];
   w.close = () => { events.push("close"); };
   w.chrome = {
-    storage: { local: { get: () => Promise.resolve(JSON.parse(JSON.stringify(sharedStore))), set: (o, cb) => { Object.assign(sharedStore, JSON.parse(JSON.stringify(o))); cb && cb(); return Promise.resolve(); } }, onChanged: { addListener() {} } },
+    storage: {
+      local: {
+        get: () => Promise.resolve(JSON.parse(JSON.stringify(sharedStore))),
+        set: (o, cb) => {
+          const clone = JSON.parse(JSON.stringify(o));
+          const changes = {};
+          for (const k of Object.keys(clone)) {
+            changes[k] = { oldValue: sharedStore[k] ? JSON.parse(JSON.stringify(sharedStore[k])) : undefined, newValue: JSON.parse(JSON.stringify(clone[k])) };
+            sharedStore[k] = clone[k];
+          }
+          cb && cb();
+          queueMicrotask(() => {
+            for (const fn of storageListeners) fn(JSON.parse(JSON.stringify(changes)), "local");
+          });
+          return Promise.resolve();
+        }
+      },
+      onChanged: { addListener: fn => storageListeners.push(fn) }
+    },
     runtime: {
       sendMessage: async m => {
         if (m && m.type === "rme:tabState") return tabState || { learned: [], hosts: [] };
@@ -36,7 +54,7 @@ async function page(file, { report, tabState, url = "https://site.test/", bf = B
   // load the scripts in the order the page lists them, like the browser does
   for (const [, src] of html.matchAll(/<script src="([^"]+)"><\/script>/g)) w.eval(read(src));
   await wait(150);
-  return { w, d: w.document, store: sharedStore, created, events, $: id => w.document.getElementById(id), ev: (n, t) => t.dispatchEvent(new w.Event(n, { bubbles: true, cancelable: true })) };
+  return { w, d: w.document, store: sharedStore, created, events, storageListeners, $: id => w.document.getElementById(id), ev: (n, t) => t.dispatchEvent(new w.Event(n, { bubbles: true, cancelable: true })) };
 }
 const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
 
@@ -122,25 +140,43 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.strictEqual(fonts(o.store).find(f => f.name === "Poppins").category, "sans");
 
   // segmented controls, switches, selector validation & persistence
-  o.$("sizeSeg").children[1].click(); await wait(300);
+  o.$("sizeSeg").children[1].click(); await wait(50);
   assert.strictEqual(o.store.rmeSettings.mono.sizeMode, "custom");
   assert.ok(o.$("sizeNum").classList.contains("show"), "custom size slides in");
-  o.$("textarea").checked = true; o.ev("change", o.$("textarea")); await wait(300);
+  o.$("textarea").checked = true; o.ev("change", o.$("textarea")); await wait(50);
   assert.strictEqual(o.store.rmeSettings.mono.textarea, true);
-  o.$("edAutoReload").checked = true; o.ev("change", o.$("edAutoReload")); await wait(300);
+
+  // edAutoReload saves immediately without waiting for debounce and survives stale storage.onChanged echoes and reloads
+  o.$("edAutoReload").checked = true; o.ev("change", o.$("edAutoReload")); await wait(30);
   assert.strictEqual(o.store.rmeSettings.editors.autoReload, true, "edAutoReload setting is saved immediately");
-  // verify persistence across simulated reload / new page instance loading from storage
   const o2 = await page("options.html");
   assert.strictEqual(o2.$("edAutoReload").checked, true, "edAutoReload switch state persists from storage on reload");
+  o2.$("edAutoReload").checked = false; o2.ev("change", o2.$("edAutoReload")); await wait(30);
+  assert.strictEqual(o.store.rmeSettings.editors.autoReload, false, "disabling edAutoReload is saved immediately");
+  // simulate a stale storage.onChanged echo arriving right after enabling edAutoReload
+  o2.$("edAutoReload").checked = true; o2.ev("change", o2.$("edAutoReload"));
+  const staleSnap = JSON.parse(JSON.stringify(sharedStore.rmeSettings));
+  staleSnap.editors.autoReload = false;
+  o2.storageListeners.forEach(fn => fn({ rmeSettings: { newValue: staleSnap } }, "local"));
+  await wait(30);
+  assert.strictEqual(o2.$("edAutoReload").checked, true, "stale storage.onChanged echo does not reset edAutoReload");
+  const o3 = await page("options.html");
+  assert.strictEqual(o3.$("edAutoReload").checked, true, "edAutoReload stays enabled across reload");
+  o3.$("edAutoReload").checked = false; o3.ev("change", o3.$("edAutoReload")); await wait(30);
+  const o4 = await page("options.html");
+  assert.strictEqual(o4.$("edAutoReload").checked, false, "disabled edAutoReload state persists across reload");
 
-  o.$("edProtect").checked = false; o.ev("change", o.$("edProtect")); await wait(300);
+  o.$("edProtect").checked = false; o.ev("change", o.$("edProtect")); await wait(50);
   assert.strictEqual(o.store.rmeSettings.editors.protect, false);
-  o.$("edSelectors").value = ".my-editor\n:::bad"; o.ev("input", o.$("edSelectors")); await wait(300);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(o.store.rmeSettings.editors.selectors)), [".my-editor", ":::bad"]);
+  o.$("edSelectors").value = ".my-editor\n:::bad"; o.ev("input", o.$("edSelectors"));
+  o.ev("pagehide", o.w); await wait(50);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(o.store.rmeSettings.editors.selectors)), [".my-editor", ":::bad"], "pagehide flushes pending debounced edits");
   o.$("resetAll").click(); await wait(50);
   assert.strictEqual(o.store.rmeSettings.mono.textarea, false, "reset everything");
   [...o.$("toasts").querySelectorAll("button")].pop().click(); await wait(50);
   assert.strictEqual(o.store.rmeSettings.mono.sizeMode, "custom", "reset can be undone");
+  // leave clean factory defaults for the popup test suite
+  o.$("resetAll").click(); await wait(50);
 
   // ---------------------------------------------------------------- popup
   const report = { host: "site.test", active: true, reason: "", protect: true, siteOff: false, deferred: ["Late Mono"],
@@ -163,7 +199,12 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   const p2 = await page("popup.html", { report });
   assert.strictEqual(p2.$("edAutoReload").checked, true, "popup edAutoReload setting persists from storage");
 
-  // one switch for the whole site
+  // one switch for the whole site (still mutates live settings.editors even after storage.onChanged)
+  const updated = JSON.parse(JSON.stringify(sharedStore.rmeSettings));
+  updated.editors.autoReload = false;
+  p.storageListeners.forEach(fn => fn({ rmeSettings: { newValue: updated } }, "local"));
+  await wait(20);
+  assert.strictEqual(p.$("edAutoReload").checked, false, "popup syncs edAutoReload on external storage change");
   p.$("edSwitch").checked = false; p.ev("change", p.$("edSwitch")); await wait(50);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(p.store.rmeSettings.editors.offSites)), ["site.test"]);
   p.$("edSwitch").checked = true; p.ev("change", p.$("edSwitch")); await wait(50);
@@ -207,9 +248,11 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.strictEqual(p.$("banner").hidden, false, "subframe learned font shows reload banner");
 
   // without a usable browser font the system stack stays
+  sharedStore.rmeBrowserFonts = { available: false };
   const plain = await page("popup.html", { report, bf: { available: false } });
   assert.strictEqual(plain.d.documentElement.style.getPropertyValue("--font-ui"), "", "no variable set, so the CSS default applies");
   assert.ok(plain.d.documentElement.classList.contains("ready"));
+  sharedStore.rmeBrowserFonts = BF;
 
   // unsupported page
   p = await page("popup.html", { report: undefined, url: "chrome://extensions/" });

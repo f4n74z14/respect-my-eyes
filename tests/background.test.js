@@ -6,7 +6,7 @@ const store = { settings: { enabled: false, excludedSites: ["a.com"] }, browserF
 let installed, onMessage;
 const badges = new Map(), titles = new Map(), reloads = [];
 const ctx = {
-  console, setTimeout, clearTimeout,
+  console, setTimeout, clearTimeout, URL,
   importScripts: () => {},
   chrome: {
     storage: { local: {
@@ -71,5 +71,40 @@ vm.runInContext(fs.readFileSync(path.join(__dirname, "../dist/background.js"), "
   assert.strictEqual(onMessage({ type: "rme:learn", names: ["No Host"] }, {}, () => {}), undefined, "a report without a site is ignored");
   assert.strictEqual(onMessage({ type: "rme:learn", host: "x.test", names: "nope" }, {}, () => {}), undefined);
 
-  console.log("background.test.js: migration + refresh + site hints + badge/autoReload ok");
+  // --- Security & anti-overfitting checks --------------------------------------------------------------------------
+  let finished = false;
+  process.on("beforeExit", () => { if (!finished) { console.error("background.test.js: exited before completion"); process.exit(1); } });
+
+  // 1. Subframe cannot reset top-frame state via rme:pageStart
+  const r11 = await new Promise(r => { if (!onMessage({ type: "rme:learn", host: "tab11.test", names: ["Tab11 Mono"] }, { tab: { id: 11 }, origin: "https://tab11.test" }, r)) r("ignored"); });
+  assert.strictEqual(r11, true, "matching origin learn succeeds");
+  assert.strictEqual(onMessage({ type: "rme:pageStart" }, { tab: { id: 11 }, frameId: 2 }, () => {}), undefined, "subframe pageStart ignored");
+  onMessage({ type: "rme:tabState", tabId: 11 }, {}, res => (tabState = res));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(tabState.hosts)), ["tab11.test"], "subframe pageStart did not clear tab state");
+
+  // 2. Content scripts (sender.tab present) cannot read tabState or trigger refresh
+  let blockedState = "unset";
+  assert.strictEqual(onMessage({ type: "rme:tabState", tabId: 11 }, { tab: { id: 11 } }, r => (blockedState = r)), undefined, "content script cannot query rme:tabState");
+  assert.strictEqual(blockedState, "unset");
+  assert.strictEqual(onMessage({ type: "rme:refresh" }, { tab: { id: 11 } }, () => {}), undefined, "content script cannot trigger rme:refresh");
+
+  // 3. Compromised frame cannot poison another domain's hints
+  const beforePoison = JSON.stringify(store.rmeHints);
+  assert.strictEqual(onMessage({ type: "rme:learn", host: "github.com", names: ["Fake Font"] }, { tab: { id: 12 }, origin: "https://evil.test" }, () => {}), undefined, "mismatched sender origin rejected");
+  assert.strictEqual(onMessage({ type: "rme:learn", host: "github.com", names: ["Fake Font"] }, { tab: { id: 12 }, origin: "null" }, () => {}), undefined, "opaque sandbox origin rejected");
+  assert.strictEqual(JSON.stringify(store.rmeHints), beforePoison, "victim domain hints remain untouched");
+
+  // 4. Single malicious tab with many subdomains cannot evict other domains' hints
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => {
+      const ret = onMessage({ type: "rme:learn", host: `sub${i}.flood.test`, names: ["Flood Mono"] }, { tab: { id: 13 }, origin: `https://sub${i}.flood.test` }, r);
+      if (!ret) r();
+    });
+  }
+  const floodHosts = Object.keys(store.rmeHints).filter(h => h.endsWith(".flood.test"));
+  assert.strictEqual(floodHosts.length, 8, "per-tab host quota caps hint pollution from one tab");
+  assert.ok("site.test" in store.rmeHints, "legitimate cached hints were not evicted");
+
+  finished = true;
+  console.log("background.test.js: migration + refresh + site hints + badge/autoReload + security ok");
 })().catch(e => { console.error(e); process.exit(1); });

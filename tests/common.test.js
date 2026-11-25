@@ -228,4 +228,22 @@ t("validates selector lists", () => {
     }
 });
 
+t("security hardening limits", () => {
+    assert.strictEqual(F.cssQuote('Evil\n\r\x00"\\Face'), '"EvilFace"', "strips control chars, quotes and backslashes");
+    assert.deepStrictEqual(F.cleanHostList(["__proto__", "constructor", "prototype", "good.test", "https://EVIL.test/path"]), ["good.test", "evil.test"]);
+    assert.strictEqual(F.cleanHostList(["a".repeat(300)])[0].length, 253, "hostname capped at 253 chars");
+
+    const protoBefore = ({}).polluted;
+    const baseHints = Object.assign({}, { "keep.test": ["Hack"] });
+    assert.strictEqual(F.addHints(baseHints, "__proto__", ["Mono"]), null, "prototype key rejected");
+    assert.strictEqual(F.addHints(baseHints, "constructor", ["Mono"]), null);
+    assert.strictEqual(F.addHints(baseHints, "toString.test", "not-an-array"), null, "non-array names safely ignored");
+    assert.strictEqual(({}).polluted, protoBefore);
+
+    const manyFamilies = Array.from({ length: 100 }, (_, i) => `Font${i}`).join(", ") + ", sans-serif";
+    assert.strictEqual(F.splitFamilies(manyFamilies).length, 64, "font-family list capped at 64");
+
+    assert.strictEqual(F.fontFaceExtraCss("X", "sans", "Arial", null, { weight: "1 ".repeat(25), style: "normal", stretch: "normal" }), "", "overlong weight descriptor rejected");
+});
+
 console.log("common.test.js: " + n + " groups passed");

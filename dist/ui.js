@@ -15,9 +15,11 @@
         if (cls) node.className = cls;
         if (text !== undefined && text !== null) node.textContent = text;
 
-        for (const [key, value] of Object.entries(attrs || {})) {
-            if (key.startsWith("on") || PROPS.has(key)) node[key] = value;
-            else node.setAttribute(key, value);
+        if (attrs) {
+            for (const [key, value] of Object.entries(attrs)) {
+                if (key.startsWith("on") || PROPS.has(key)) node[key] = value;
+                else node.setAttribute(key, value);
+            }
         }
         return node;
     }
@@ -81,9 +83,11 @@
         const timer = setTimeout(close, undo ? 8000 : 2600);
     }
 
-    let uiSheet = null, uiStyleEl = null;
+    let uiSheet = null, uiStyleEl = null, lastUiCss = "";
 
     function setUiFaces(css) {
+        if (css === lastUiCss && (uiSheet || uiStyleEl)) return;
+        lastUiCss = css;
         if (!uiSheet && !uiStyleEl) {
             try {
                 uiSheet = new CSSStyleSheet();
@@ -128,5 +132,15 @@
     // Never leave a page invisible if the settings fail to load
     setTimeout(() => document.documentElement.classList.add("ready"), 800);
 
-    self.RME.ui = { applyFonts, $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, send: msg => chrome.runtime.sendMessage(msg) };
+    const send = msg => chrome.runtime.sendMessage(msg);
+
+    async function refreshBrowserFonts() {
+        try {
+            const fresh = await send({ type: "rme:refresh" });
+            return fresh && typeof fresh === "object" && "available" in fresh ? fresh : null;
+        }
+        catch { return null; }
+    }
+
+    self.RME.ui = { applyFonts, $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, send, refreshBrowserFonts };
 })();

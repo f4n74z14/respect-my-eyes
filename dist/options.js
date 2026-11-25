@@ -2,17 +2,21 @@
     "use strict";
 
     const F = self.RME;
-    const { $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, send, applyFonts } = F.ui;
+    const { $, el, plural, select, segmented, bindSwitch, bindNumber, bindLines, toast, applyFonts, refreshBrowserFonts } = F.ui;
 
     const BROWSER_KEY = { sans: "sansserif", serif: "serif", mono: "fixed" };
     const CAT_NAMES = { sans: "Sans", serif: "Serif", mono: "Mono", ignore: "Icon font" };
     const CAT_OPTIONS = F.MANUAL_CATS.map(c => [c, CAT_NAMES[c]]);
     const FILTER_FROM = 8;          // the filter box appears for longer lists
     const quoted = name => `\u201c${name}\u201d`;
+    const COLLATOR = new Intl.Collator();
+    const catSelectTpl = select(CAT_OPTIONS, "sans");
 
     let settings = F.normalizeSettings(null);
     let bf = null;                  // cached browser font settings
     let pending = 0;                // timer of a debounced save
+    let savingCount = 0;            // in-flight storage.save() count to guard onChange against stale echoes
+    let lastSavedJson = "";
 
     // -----------------------------------------------------------------------------------------------------------------
     // Saving and undo
@@ -28,7 +32,11 @@
     function saveNow() {
         clearTimeout(pending);
         pending = 0;
-        return F.storage.save(settings).then(flashSaved);
+        savingCount++;
+        lastSavedJson = JSON.stringify(F.normalizeSettings(settings));
+        return F.storage.save(settings)
+            .then(flashSaved)
+            .finally(() => { savingCount = Math.max(0, savingCount - 1); });
     }
 
     // For typing: wait for a pause
@@ -36,6 +44,10 @@
         clearTimeout(pending);
         pending = setTimeout(saveNow, 250);
     }
+
+    const flushPending = () => { if (pending) saveNow(); };
+    window.addEventListener("pagehide", flushPending);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushPending(); });
 
     // Destructive actions apply at once and can be undone, which beats a confirm() dialog
     function withUndo(message, mutate) {
@@ -181,7 +193,7 @@
 
         const items = settings.manualFonts
             .filter(f => !query || f.name.toLowerCase().includes(query))
-            .sort((a, b) => a.name.localeCompare(b.name));
+            .sort((a, b) => COLLATOR.compare(a.name, b.name));
 
         $("count").textContent = query ? `${items.length} of ${plural(total, "font", "fonts")}` : plural(total, "font", "fonts");
 
@@ -193,16 +205,12 @@
         const rows = items.map(font => {
             const key = F.norm(font.name);
             const row = el("div", "list-row", null, { "data-key": key });
-            const category = select(CAT_OPTIONS, font.category, { "aria-label": `Category of ${font.name}` });
-
-            category.onchange = () => { font.category = category.value; save(); };
+            const category = catSelectTpl.cloneNode(true);
+            category.value = font.category;
+            category.setAttribute("aria-label", `Category of ${font.name}`);
 
             const remove = el("button", "icon", "\u2715", {
-                type: "button", title: "Remove", "aria-label": `Remove ${font.name}`,
-                onclick() {
-                    row.classList.add("removing");
-                    setTimeout(() => withUndo(`Removed ${quoted(font.name)}`, () => removeManual(key)), 160);
-                }
+                type: "button", title: "Remove", "aria-label": `Remove ${font.name}`
             });
 
             row.append(el("span", "name", font.name, { title: font.name }), category, remove);
@@ -218,12 +226,19 @@
         }
     }
 
+    const manualIndex = () => new Map(settings.manualFonts.map((f, i) => [F.norm(f.name), i]));
+
     // Adds new fonts and updates the category of known ones
     function applyEntries(entries) {
+        const index = manualIndex();
         for (const { name, category } of entries) {
-            const i = findManual(F.norm(name));
+            const key = F.norm(name);
+            const i = index.get(key);
 
-            if (i === -1) settings.manualFonts.push({ name, category });
+            if (i === undefined) {
+                index.set(key, settings.manualFonts.length);
+                settings.manualFonts.push({ name, category });
+            }
             else settings.manualFonts[i].category = category;
         }
         settings.manualFonts = F.cleanManual(settings.manualFonts);
@@ -231,6 +246,24 @@
 
     function bindAddForm() {
         $("newCat").replaceChildren(...CAT_OPTIONS.map(([v, label]) => el("option", "", label, { value: v })));
+
+        $("manualList").onchange = e => {
+            const sel = e.target.closest("select");
+            const row = sel && sel.closest(".list-row");
+            const i = row ? findManual(row.dataset.key) : -1;
+            if (i > -1) { settings.manualFonts[i].category = sel.value; save(); }
+        };
+
+        $("manualList").onclick = e => {
+            const btn = e.target.closest("button.icon");
+            const row = btn && btn.closest(".list-row");
+            const key = row && row.dataset.key;
+            const i = key ? findManual(key) : -1;
+            if (i === -1) return;
+            const name = settings.manualFonts[i].name;
+            row.classList.add("removing");
+            setTimeout(() => withUndo(`Removed ${quoted(name)}`, () => removeManual(key)), 160);
+        };
 
         $("addForm").onsubmit = e => {
             e.preventDefault();
@@ -264,18 +297,20 @@
     // Each parsed entry is compared with the current list: new, update (category changes) or same
     function parseImport() {
         const parsed = F.parseFontLines($("impText").value, importCat);
+        const index = manualIndex();
 
         for (const e of parsed.entries) {
-            const i = findManual(F.norm(e.name));
-            e.state = i === -1 ? "new" : settings.manualFonts[i].category !== e.category ? "update" : "same";
+            const i = index.get(F.norm(e.name));
+            e.state = i === undefined ? "new" : settings.manualFonts[i].category !== e.category ? "update" : "same";
         }
         return parsed;
     }
 
     function renderImportPreview() {
         const { entries, invalid } = parseImport();
-        const count = state => entries.filter(e => e.state === state).length;
-        const [added, changed, same] = ["new", "update", "same"].map(count);
+        const counts = { new: 0, update: 0, same: 0 };
+        for (const e of entries) counts[e.state]++;
+        const { new: added, update: changed, same } = counts;
         const row = (...children) => { const r = el("div", "list-row static"); r.append(...children); return r; };
 
         $("impPreview").hidden = !entries.length && !invalid.length;
@@ -330,7 +365,7 @@
     // -----------------------------------------------------------------------------------------------------------------
 
     const renderIcons = () => bindLines("iconPatterns", settings.iconPatterns, lines => {
-        settings.iconPatterns = lines.map(s => s.trim()).filter(Boolean);
+        settings.iconPatterns = lines.map(s => s.trim().slice(0, 80)).filter(Boolean).slice(0, 200);
         save();
     });
 
@@ -349,6 +384,7 @@
             const [file] = this.files;
             this.value = "";
             if (!file) return;
+            if (file.size > 2 * 1024 * 1024) { toast("Settings file is too large"); return; }
 
             try {
                 const next = F.normalizeSettings(JSON.parse(await file.text()));
@@ -360,11 +396,17 @@
         $("resetAll").onclick = () => withUndo("Settings reset", () => { settings = F.normalizeSettings(null); });
         $("openBrowserFonts").onclick = () => chrome.tabs.create({ url: "chrome://settings/fonts" });
         $("refreshBf").onclick = async () => {
-            bf = (await send({ type: "rme:refresh" })) || bf;
-            renderBrowserStatus();
-            renderFonts();
+            await syncBrowserFonts();
             toast("Font settings re-read");
         };
+    }
+
+    async function syncBrowserFonts() {
+        const fresh = await refreshBrowserFonts();
+        if (!fresh) return;
+        bf = fresh;
+        renderBrowserStatus();
+        renderFonts();
     }
 
     // Highlights the nav link of the section being read
@@ -398,6 +440,7 @@
 
     (async () => {
         ({ settings, bf } = await F.storage.load());
+        lastSavedJson = JSON.stringify(settings);
 
         bindAddForm();
         bindImport();
@@ -406,11 +449,7 @@
         loadInstalledFonts();
         bindNav();
 
-        if (!bf) {
-            bf = await send({ type: "rme:refresh" });
-            renderBrowserStatus();
-            renderFonts();
-        }
+        if (!bf) await syncBrowserFonts();
     })();
 
     // The popup, the learning service worker or another tab may change things while this page is open
@@ -422,11 +461,13 @@
         }
 
         const incoming = changes[F.KEYS.settings];
-        if (incoming && !pending) {
+        if (incoming && !pending && savingCount === 0) {
             const next = F.normalizeSettings(incoming.newValue);
+            const nextJson = JSON.stringify(next);
 
-            if (JSON.stringify(next) !== JSON.stringify(F.normalizeSettings(settings))) {
+            if (nextJson !== lastSavedJson && nextJson !== JSON.stringify(F.normalizeSettings(settings))) {
                 settings = next;
+                lastSavedJson = nextJson;
                 renderAll();
             }
         }

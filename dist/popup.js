@@ -2,15 +2,19 @@
     "use strict";
 
     const F = self.RME;
-    const { $, el, segmented, bindSwitch, toast, applyFonts } = F.ui;
+    const { $, el, segmented, bindSwitch, toast, applyFonts, refreshBrowserFonts } = F.ui;
 
     const SITE_CATS = [["sans", "Sans"], ["serif", "Serif"], ["mono", "Mono"], ["ignore", "Icon"]];
     const BROWSER_STORES = new Set(["chromewebstore.google.com", "microsoftedge.microsoft.com"]);
-    const matches = (host, list) => list.filter(x => host === x || host.endsWith(`.${x}`));
 
-    let settings, bf, tab, host = "", report = null, baseBanner = "";
+    let settings, bf, tab, host = "", report = null, baseBanner = "", lastTabLearned = [];
 
     const save = () => F.storage.save(settings);
+    const setSiteFlag = (list, active) => {
+        const next = list.filter(x => host !== x && !host.endsWith(`.${x}`));
+        if (!active) next.push(host);
+        return next;
+    };
 
     function needsReload(text = "Reload to apply changes.", persist = false) {
         if (persist) baseBanner = text;
@@ -49,20 +53,15 @@
         $("site").hidden = !(report && host && (report.active || report.reason === "excluded"));
         if ($("site").hidden) return;
 
-        const on = !matches(host, settings.excludedSites).length;
+        const on = !F.isExcluded(host, settings.excludedSites);
 
         $("host").textContent = host;
         $("host").title = host;
         $("siteHint").textContent = on ? "Fonts are replaced here" : "Paused on this site";
 
         bindSwitch("siteOn", on, async enable => {
-            const drop = new Set(matches(host, settings.excludedSites));
-
-            settings.excludedSites = settings.excludedSites.filter(x => !drop.has(x));
-            if (!enable) {
-                settings.excludedSites.push(host);
-                needsReload("Reload to restore original fonts.");
-            }
+            settings.excludedSites = setSiteFlag(settings.excludedSites, enable);
+            if (!enable) needsReload("Reload to restore original fonts.");
             else restoreBanner();
             await save();
             renderSite();
@@ -120,21 +119,17 @@
         $("editorsBox").hidden = !(editors.length || late.length || (active && report.siteOff));
         if ($("editorsBox").hidden) return;
 
-        const { editors: protection } = settings;
+        const protectOn = settings.editors.protect;
 
-        bindSwitch("edSwitch", !report.siteOff && protection.protect, async protect => {
-            const drop = new Set(matches(host, protection.offSites));
-
-            protection.offSites = protection.offSites.filter(x => !drop.has(x));
-            if (!protect) protection.offSites.push(host);
-
+        bindSwitch("edSwitch", !report.siteOff && protectOn, async protect => {
+            settings.editors.offSites = setSiteFlag(settings.editors.offSites, protect);
             await save();
             needsReload(protect ? "Reload to protect editors." : "Reload to apply change.", true);
         });
-        $("edSwitch").disabled = !protection.protect;
+        $("edSwitch").disabled = !protectOn;
 
         if ($("edAutoRow")) {
-            $("edAutoRow").hidden = !protection.protect;
+            $("edAutoRow").hidden = !protectOn;
             bindSwitch("edAutoReload", settings.editors.autoReload, async auto => {
                 settings.editors.autoReload = auto;
                 await save();
@@ -149,7 +144,7 @@
         };
 
         $("editors").replaceChildren(
-            ...(protection.protect ? [] : [el("div", "hint", "Editor protection is off in Settings.")]),
+            ...(protectOn ? [] : [el("div", "hint", "Editor protection is off in Settings.")]),
             ...editors.map(({ sample, count }) => row(text(el("code", "", sample, { title: sample })), count > 1 ? [el("span", "hint", `\u00d7${count}`)] : [])),
             ...late.map(name => row(text(el("div", "", name)), [el("span", "badge browser", "Remembered")]))
         );
@@ -199,26 +194,23 @@
         renderFonts();
 
         if (!bf) {
-            try {
-                const fresh = await F.ui.send({ type: "rme:refresh" });
-                if (fresh && typeof fresh === "object" && "available" in fresh) {
-                    bf = fresh;
-                    applyFonts(settings, bf);
-                    renderFonts();
-                }
-            } catch {}
+            const fresh = await refreshBrowserFonts();
+            if (fresh) {
+                bf = fresh;
+                applyFonts(settings, bf);
+                renderFonts();
+            }
         }
 
         [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-        let tabLearned = [];
         try {
             const [rep, state] = await Promise.all([
                 tab ? chrome.tabs.sendMessage(tab.id, { type: "rme:report" }, { frameId: 0 }).catch(() => null) : null,
                 tab ? F.ui.send({ type: "rme:tabState", tabId: tab.id }).catch(() => null) : null
             ]);
             report = rep;
-            if (state && Array.isArray(state.learned)) tabLearned = state.learned;
+            if (state && Array.isArray(state.learned)) lastTabLearned = state.learned;
         }
         catch { report = null; }
 
@@ -231,7 +223,7 @@
 
         renderSite();
         renderUnknown();
-        renderEditors(tabLearned);
+        renderEditors(lastTabLearned);
     }
 
     F.storage.onChange(changes => {
@@ -240,6 +232,12 @@
         if (settings) {
             applyFonts(settings, bf);
             renderFonts();
+            $("enabled").checked = settings.enabled;
+            $("app").classList.toggle("off", !settings.enabled);
+            if (report !== null || host) {
+                renderSite();
+                renderEditors(lastTabLearned);
+            }
         }
     });
 

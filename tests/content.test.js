@@ -295,5 +295,39 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   await wait(500);
   assert.ok(env.sheets()[0].includes('@font-face{font-family:"Editor Only Mono"') && env.sheets()[0].includes('local("JetBrains Mono")') && env.sheets()[0].includes("size-adjust:81.25%"), "Visit 2 applies user custom mono font cleanly from base sheet");
 
+  // --- 9. Security & DoS hardening: CSS prop injection, cyclic @import, spoofed animationstart, large @font-face batch ---
+  env = setup({ settings: undefined, bf: BF, editor: true });
+  await wait(400);
+  // Spoofed rme-seen animationstart on document.body must be ignored
+  const fakeDiv = env.w.document.createElement("div");
+  fakeDiv.innerHTML = '<div style="font-family: \'Spoofed Body Mono\', monospace">fake</div>';
+  env.w.document.body.appendChild(fakeDiv);
+  const spoofEv = new env.w.Event("animationstart", { bubbles: true });
+  spoofEv.animationName = "rme-seen";
+  env.w.document.body.dispatchEvent(spoofEv);
+  await wait(100);
+  assert.ok(!env.w.__sent.some(m => m.names && m.names.includes("Spoofed Body Mono")), "spoofed rme-seen on document.body is ignored");
+
+  // Escaped CSS custom property name injection (--x{} -> unescaped by CSSStyleDeclaration) must be blocked
+  const injStyle = env.w.document.createElement("style");
+  injStyle.textContent = ':root { --font-evil\\7b color\\3a red\\7d: "Inter", sans-serif; }';
+  env.w.document.head.appendChild(injStyle);
+  // Large batch of @font-face rules must be deleted cleanly without quadratic stall
+  const manyFaces = env.w.document.createElement("style");
+  manyFaces.textContent = Array.from({ length: 200 }, (_, i) => `@font-face { font-family: "Open Sans"; src: url(f${i}.woff2); }`).join("\n");
+  env.w.document.head.appendChild(manyFaces);
+  // Cyclic @import stylesheets must not hang or overflow stack
+  const cycA = { cssRules: [] };
+  const cycB = { cssRules: [{ styleSheet: cycA, get type() { return 3; } }] };
+  cycA.cssRules.push({ styleSheet: cycB, get type() { return 3; } });
+  Object.defineProperty(env.w.document, "adoptedStyleSheets", {
+    get: () => [cycA, ...env.adopted()],
+    set: () => {},
+    configurable: true
+  });
+  await wait(350);
+  assert.ok(!env.sheets()[1].includes("color:red") && !env.sheets()[1].includes("--font-evil"), "escaped custom property CSS injection blocked");
+  assert.strictEqual(manyFaces.sheet.cssRules.length, 0, "overridden @font-face batch removed cleanly");
+
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

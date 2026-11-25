@@ -23,9 +23,15 @@
     const isCat = cat => CATS.includes(cat);
 
     const VAR_SCOPE = /^(:root|html|body)\b/i;
+    const SAFE_VAR_PROP = /^--[a-zA-Z0-9_-]{1,120}$/;
     const CHUNK = 250;              // elements sampled per tick
     const SAMPLE_LIMIT = 6000;
     const REPORT_LIMIT = 8000;
+    const LIMITS = {
+        analysis: 2000, faces: 1000, pageFaces: 1000, faceRules: 1000, selPerCat: 1500, vars: 1000,
+        sampled: 5000, learnPerPage: 24, lateEditors: 25, rulesPerScan: 15000, sheetsPerScan: 200,
+        propsPerRule: 400, selectorTouchChecks: 250, selectorLen: 2000, valueLen: 2000
+    };
     const RULE_TYPES = { CSSStyleRule: 1, CSSImportRule: 3, CSSFontFaceRule: 5, CSSKeyframesRule: 7 };   // legacy fallback
 
     // Our site and its top-level site, so an excluded site also excludes its iframes
@@ -96,10 +102,13 @@
         if (!baseSink.sheet || !siteSink.sheet) return;
 
         try {
-            const current = [...document.adoptedStyleSheets];
-            const wanted = [...current.filter(s => !ours.has(s)), baseSink.sheet, siteSink.sheet];
+            const current = document.adoptedStyleSheets;
+            const len = current.length;
+            if (len >= 2 && current[len - 2] === baseSink.sheet && current[len - 1] === siteSink.sheet) return;
 
-            if (wanted.some((s, i) => current[i] !== s) || current.length !== wanted.length) document.adoptedStyleSheets = wanted;
+            const wanted = current.filter(s => !ours.has(s));
+            wanted.push(baseSink.sheet, siteSink.sheet);
+            document.adoptedStyleSheets = wanted;
         }
         catch {
             baseSink.sheet = siteSink.sheet = null;     // adoption not possible here, fall back to <style>
@@ -111,7 +120,12 @@
     // ---------------------------------------------------------------------------------------------------------------
 
     function analyze(value) {
-        if (!st.analysis.has(value)) st.analysis.set(value, F.analyzeStack(value, cfg.matchers));
+        if (!value || value.length > LIMITS.valueLen) return null;
+        if (!st.analysis.has(value)) {
+            const res = F.analyzeStack(value, cfg.matchers);
+            if (st.analysis.size < LIMITS.analysis) st.analysis.set(value, res);
+            return res;
+        }
         return st.analysis.get(value);
     }
 
@@ -123,18 +137,33 @@
     /*
      * @param defer true for names found inside a self-measuring editor: a monospace font it was already using must not
      *              be swapped under it, unless it is in the base sheet (applied before any page script runs).
+     * @return true when a face was added to st.faces
      */
-    function registerNames(a, defer) {
-        for (const n of a.names) {
-            if (!isCat(n.cat) || cfg.chosenLower.has(n.lower) || st.faces.has(n.lower) || lateNames.has(n.lower)) continue;
+    function registerFace(name, lower, cat, defer) {
+        if (!isCat(cat) || cfg.chosenLower.has(lower) || st.faces.has(lower) || lateNames.has(lower)) return false;
 
-            if (defer && n.cat === "mono" && !cfg.preFaces.has(n.lower)) {
-                lateNames.set(n.lower, n.name);
-                learnQueue.add(n.name);
+        if (defer && cat === "mono" && !cfg.preFaces.has(lower)) {
+            if (lateNames.size < LIMITS.learnPerPage) {
+                lateNames.set(lower, name);
+                learnQueue.add(name);
             }
-            else st.faces.set(n.lower, { name: n.name, cat: n.cat });
+            return false;
         }
+        if (st.faces.size >= LIMITS.faces) return false;
+        st.faces.set(lower, { name, cat });
+        return true;
     }
+
+    function registerNames(a, defer) {
+        let added = false;
+        for (const n of a.names) added = registerFace(n.name, n.lower, n.cat, defer) || added;
+        return added;
+    }
+
+    const hasMonoFont = a => a.cat === "mono" || a.names.some(n => n.cat === "mono");
+
+    // True when a stack contains any mono family not yet resolved in chosenLower / faces / lateNames / preFaces
+    const hasUnregisteredMono = a => a.names.some(n => n.cat === "mono" && !cfg.chosenLower.has(n.lower) && !st.faces.has(n.lower) && !lateNames.has(n.lower));
 
     // Our monospace rules must not reach into editors: they would resize and respace text the editor positions itself
     const wrap = css => cfg.protectSel ? `@scope (:root) to (${cfg.protectSel}){${css}}` : css;
@@ -148,48 +177,63 @@
         return C ? rule instanceof C : rule.type === RULE_TYPES[ctor];
     }
 
-    const hasEditor = () => lateNames.size > 0 || !!(cfg.protectSel && document.querySelector(cfg.protectSel));
+    // Memoized per synchronous scan pass to avoid repeated expensive :has() queries across rules
+    let editorPresentCache = null;
+    function hasEditor() {
+        if (lateNames.size > 0) return true;
+        if (!cfg.protectSel) return false;
+        if (editorPresentCache === null) editorPresentCache = !!document.querySelector(cfg.protectSel);
+        return editorPresentCache;
+    }
 
     function ruleTouchesEditor(sel) {
-        if (!cfg.protectSel || !sel || sel === "*" || VAR_SCOPE.test(sel)) return false;
+        if (!cfg.protectSel || !sel || sel === "*" || sel.length > LIMITS.selectorLen || VAR_SCOPE.test(sel)) return false;
         try {
+            let checked = 0;
             for (const el of document.querySelectorAll(sel)) {
                 if (inEditor(el)) return true;
+                if (++checked >= LIMITS.selectorTouchChecks) break;
             }
         }
         catch { /* invalid selector in page stylesheet */ }
         return false;
     }
 
+    const safeRuleSelector = sel => !!sel && sel.length <= LIMITS.selectorLen && !/[{};@\\]/.test(sel);
+
     // Custom properties holding a font stack (--font-body: ...) are overridden where they are defined
     function overrideCustomProps(rule) {
+        const sel = rule.selectorText;
+        if (!safeRuleSelector(sel) || st.vars.length >= LIMITS.vars) return;
+
         const { style } = rule;
+        const propLimit = Math.min(style.length, LIMITS.propsPerRule);
         let decls = "";
 
-        for (let i = 0; i < style.length; i++) {
+        for (let i = 0; i < propLimit; i++) {
             const prop = style[i];
-            if (!prop.startsWith("--")) continue;
+            if (!SAFE_VAR_PROP.test(prop)) continue;
 
             const value = style.getPropertyValue(prop).trim();
             if (!value || value.length > 500 || value.includes("(") || !F.looksLikeFontStack(value, prop)) continue;
 
             const a = analyze(value);
             if (overridable(a)) {
-                const defer = st.initialDone && hasEditor() && (a.cat === "mono" || a.names.some(n => n.cat === "mono"));
+                const defer = st.initialDone && hasMonoFont(a) && hasEditor();
                 registerNames(a, defer);
                 if (!defer) decls += `${prop}:${familyOf(a.cat)}!important;`;
             }
         }
-        if (decls) st.vars.push(`${rule.selectorText}{${decls}}`);
+        if (decls) st.vars.push(`${sel}{${decls}}`);
     }
 
     function onStyleRule(rule) {
         const sel = rule.selectorText;
-        const a = rule.style.fontFamily && analyze(rule.style.fontFamily);
+        const ff = rule.style.fontFamily;
+        const a = ff && analyze(ff);
 
         if (a) {
-            const hasMono = a.cat === "mono" || a.names.some(n => n.cat === "mono");
-            const defer = hasMono && hasEditor() && (st.initialDone || ruleTouchesEditor(sel));
+            const defer = hasUnregisteredMono(a) && hasEditor() && (st.initialDone || ruleTouchesEditor(sel));
             registerNames(a, defer);
 
             /*
@@ -198,7 +242,7 @@
              * ".mce-container *". So selectors are mirrored only where a name cannot be replaced: stacks made of
              * generic families (system-ui...), and monospace stacks, for the forced size.
              */
-            if (overridable(a) && sel && sel[0] !== "*" && (a.cat === "mono" || !a.names.length)) {
+            if (overridable(a) && safeRuleSelector(sel) && sel[0] !== "*" && (a.cat === "mono" || !a.names.length) && st.sel[a.cat].size < LIMITS.selPerCat) {
                 const safe = F.dropSweeps(sel);
                 if (safe) st.sel[a.cat].add(safe);
             }
@@ -206,18 +250,27 @@
         if (sel && VAR_SCOPE.test(sel)) overrideCustomProps(rule);
     }
 
-    function scanRule(rule, parent, depth) {
+    function scanRule(rule, parent, depth, budget) {
+        if (budget.rules >= LIMITS.rulesPerScan) return;
+        budget.rules++;
+
         if (isRule(rule, "CSSStyleRule")) onStyleRule(rule);               // first: style rules can have nested rules
-        else if (isRule(rule, "CSSFontFaceRule")) st.faceRules.push({ rule, parent });
-        else if (isRule(rule, "CSSImportRule")) { if (rule.styleSheet && depth < 4) scanSheet(rule.styleSheet, depth + 1); }
+        else if (isRule(rule, "CSSFontFaceRule")) { if (st.faceRules.length < LIMITS.faceRules) st.faceRules.push({ rule, parent }); }
+        else if (isRule(rule, "CSSImportRule")) { if (rule.styleSheet && depth < 4) scanSheet(rule.styleSheet, depth + 1, budget); }
         else if (depth < 6 && rule.cssRules && !isRule(rule, "CSSKeyframesRule")) {    // @media, @supports, @layer...
-            for (const child of rule.cssRules) scanRule(child, rule, depth + 1);
+            for (const child of rule.cssRules) {
+                if (budget.rules >= LIMITS.rulesPerScan) break;
+                scanRule(child, rule, depth + 1, budget);
+            }
         }
     }
 
     // @return true when the sheet had rules we had not seen
-    function scanSheet(sheet, depth = 0) {
-        if (ours.has(sheet) || st.unreadable.has(sheet)) return false;
+    function scanSheet(sheet, depth = 0, budget = { sheets: 0, rules: 0, seen: new WeakSet() }) {
+        if (ours.has(sheet) || st.unreadable.has(sheet) || budget.seen.has(sheet)) return false;
+        if (budget.sheets >= LIMITS.sheetsPerScan || budget.rules >= LIMITS.rulesPerScan) return false;
+        budget.seen.add(sheet);
+        budget.sheets++;
 
         let rules;
         try { rules = sheet.cssRules; }
@@ -229,39 +282,55 @@
         const start = st.processed.get(sheet) || 0;
         if (!rules || (st.processed.has(sheet) && rules.length === start)) return false;
 
-        st.processed.set(sheet, rules.length);
-        for (let i = start; i < rules.length; i++) scanRule(rules[i], sheet, depth);
-        return true;
+        let i = start;
+        for (; i < rules.length && budget.rules < LIMITS.rulesPerScan; i++) scanRule(rules[i], sheet, depth, budget);
+        st.processed.set(sheet, i);
+        return i > start;
     }
 
     function scanDocument() {
         let changed = false;
-        for (const sheet of [...document.styleSheets, ...document.adoptedStyleSheets]) changed = scanSheet(sheet) || changed;
+        const budget = { sheets: 0, rules: 0, seen: new WeakSet() };
+        for (const list of [document.styleSheets, document.adoptedStyleSheets]) {
+            for (const sheet of list) {
+                if (budget.sheets >= LIMITS.sheetsPerScan || budget.rules >= LIMITS.rulesPerScan) return changed;
+                if (scanSheet(sheet, 0, budget)) changed = true;
+            }
+        }
         return changed;
     }
 
     const unquote = s => s.replace(/^\s*["']|["']\s*$/g, "");
 
-    // Remove the page's own @font-face rules for families we override, so they cannot compete with ours
+    // Remove the page's own @font-face rules for families we override in O(R) reverse-index passes per parent sheet
     function deleteFontFaces() {
-        st.faceRules = st.faceRules.filter(({ rule, parent }) => {
+        const byParent = new Map();
+        const kept = [];
+
+        for (const entry of st.faceRules) {
             let family;
-            try { family = norm(unquote(rule.style.getPropertyValue("font-family"))); } catch { return true; }
+            try { family = norm(unquote(entry.rule.style.getPropertyValue("font-family"))); } catch { kept.push(entry); continue; }
 
-            if (!st.faces.has(family) && !cfg.preFaces.has(family)) return true;
+            if (!st.faces.has(family) && !cfg.preFaces.has(family)) { kept.push(entry); continue; }
+            let targets = byParent.get(entry.parent);
+            if (!targets) { targets = new Set(); byParent.set(entry.parent, targets); }
+            targets.add(entry.rule);
+        }
+        st.faceRules = kept;
 
+        for (const [parent, targets] of byParent) {
             try {
-                const idx = Array.prototype.indexOf.call(parent.cssRules, rule);
-                const count = st.processed.get(parent);
-
-                if (idx > -1) {
-                    parent.deleteRule(idx);
-                    if (count !== undefined && idx < count) st.processed.set(parent, count - 1);
+                const rules = parent.cssRules;
+                let count = st.processed.get(parent);
+                for (let i = rules.length - 1; i >= 0; i--) {
+                    if (!targets.has(rules[i])) continue;
+                    parent.deleteRule(i);
+                    if (count !== undefined && i < count) count--;
                 }
+                if (count !== undefined) st.processed.set(parent, count);
             }
             catch { /* cross-origin or read-only sheet */ }
-            return false;
-        });
+        }
     }
 
     // Faces the page declared, read from document.fonts: works for blocked stylesheets and for FontFace() made in JS
@@ -270,30 +339,24 @@
         if (!fonts || (fonts.size !== undefined && fonts.size === st.fontCount)) return false;
 
         st.fontCount = fonts.size;
-        let changed = false;
+        let changed = false, scanned = 0;
 
         fonts.forEach(f => {
-            const family = unquote(String(f.family));
+            if (++scanned > LIMITS.pageFaces * 2) return;
+            const family = unquote(String(f.family || "")).slice(0, 200);
             const lower = norm(family);
-            const key = `${lower}|${f.weight}|${f.style}|${f.stretch}`;
+            if (!lower) return;
+            const weight = String(f.weight || "").slice(0, 40), style = String(f.style || "").slice(0, 40), stretch = String(f.stretch || "").slice(0, 40);
+            const key = `${lower}|${weight}|${style}|${stretch}`;
 
-            if (st.faceKeys.has(key)) return;           // also skips our own faces, which show up here too
+            if (st.faceKeys.size >= LIMITS.pageFaces * 2 || st.faceKeys.has(key)) return;           // also skips our own faces, which show up here too
             st.faceKeys.add(key);
 
-            const desc = { family, lower, weight: f.weight, style: f.style, stretch: f.stretch };
-            if (!F.isStandardFace(desc)) { st.pageFaces.set(key, desc); changed = true; }
+            const desc = { family, lower, weight, style, stretch };
+            if (!F.isStandardFace(desc) && st.pageFaces.size < LIMITS.pageFaces) { st.pageFaces.set(key, desc); changed = true; }
 
             const cat = F.classifyName(lower, cfg.matchers);
-            if (isCat(cat) && !cfg.chosenLower.has(lower) && !st.faces.has(lower) && !lateNames.has(lower)) {
-                if (cat === "mono" && !cfg.preFaces.has(lower) && st.initialDone && hasEditor()) {
-                    lateNames.set(lower, family);
-                    learnQueue.add(family);
-                }
-                else {
-                    st.faces.set(lower, { name: family, cat });
-                    changed = true;
-                }
-            }
+            if (registerFace(family, lower, cat, st.initialDone && hasEditor())) changed = true;
         });
         return changed;
     }
@@ -378,13 +441,15 @@
     // Sampling computed styles: catches what the stylesheet walk cannot see (CORS-blocked CSS, var(--x), inline styles)
     // ---------------------------------------------------------------------------------------------------------------
 
-    // Light DOM plus open shadow roots (custom-element sites such as developers.google.com)
+    // Light DOM plus open shadow roots (custom-element sites such as developers.google.com).
+    // Uses TreeWalker so traversal stops immediately at `limit` without allocating full NodeLists.
     function collectElements(root, limit) {
         const out = [], stack = [root];
 
         while (stack.length && out.length < limit) {
-            for (const el of stack.pop().querySelectorAll("*")) {
-                if (out.length >= limit) break;
+            const walker = document.createTreeWalker(stack.pop(), 1);
+            let el;
+            while (out.length < limit && (el = walker.nextNode())) {
                 out.push(el);
                 if (el.shadowRoot) stack.push(el.shadowRoot);
             }
@@ -394,39 +459,73 @@
 
     const inEditor = el => !!cfg.protectSel && el.closest(cfg.protectSel) !== null;
 
-    // @return true when a new family was registered. Elements are de-duplicated by tag + class + inline style.
-    function processElement(el, editor) {
-        const key = `${el.nodeName}|${el.getAttribute("class") || ""}|${el.getAttribute("style") || ""}`;
+    // 53-bit FNV-1a element signature hash: eliminates per-element string concatenation and ~1.5 MB/tab of retained keys
+    function hashMix(h, s) {
+        const len = s.length;
+        h ^= len;
+        h = Math.imul(h, 0x01000193);
+        const cap = len < 512 ? len : 512;
+        for (let i = 0; i < cap; i++) {
+            h ^= s.charCodeAt(i);
+            h = Math.imul(h, 0x01000193);
+        }
+        return h;
+    }
+
+    function elemHash(el) {
+        const tag = el.nodeName;
+        const cls = typeof el.className === "string" ? el.className : (el.getAttribute("class") || "");
+        const stl = el.getAttribute("style") || "";
+        let h1 = 0x811c9dc5, h2 = 0x9e3779b9;
+        h1 = hashMix(hashMix(hashMix(h1, tag), cls), stl);
+        h2 = hashMix(hashMix(hashMix(h2, stl), cls), tag);
+        return (h1 >>> 0) * 2097152 + (h2 >>> 11);
+    }
+
+    // @return true when a new family was registered. Elements are de-duplicated by tag + class + inline style hash.
+    function processElement(el, editorState) {
+        if (st.sampled.size >= LIMITS.sampled) return false;
+        const key = elemHash(el);
         if (st.sampled.has(key)) return false;
         st.sampled.add(key);
 
+        const editor = editorState === null ? inEditor(el) : editorState;
         const a = analyze(getComputedStyle(el).fontFamily);
-        if (!a) return false;
-
-        const before = st.faces.size;
-        registerNames(a, editor);
-        return st.faces.size !== before;
+        return !!a && registerNames(a, editor);
     }
 
     // Tell the service worker which monospace fonts editors revealed, so the next load applies them from the first paint
     function flushLearn() {
         if (!learnQueue.size) return;
 
-        const names = [...learnQueue];
+        const names = [...learnQueue].slice(0, LIMITS.learnPerPage);
         learnQueue.clear();
 
         try { Promise.resolve(chrome.runtime.sendMessage({ type: "rme:learn", host: location.hostname, names })).catch(() => {}); }
         catch { /* extension was reloaded: this script is orphaned */ }
     }
 
+    const seenEditors = new WeakSet();
+    let lateEditorScans = 0;
+
     // An editor appeared (its hidden input started the animation from the base sheet): look inside it right away
     function onEditorSeen(e) {
         if (e.animationName !== "rme-seen" || !cfg || !cfg.protectSel) return;
+        const target = e.target;
+        if (!target || target.nodeType !== 1 || lateEditorScans >= LIMITS.lateEditors) return;
+        // Ignore spoofed animationstart events dispatched on non-editor elements like document.body
+        let validTarget = false;
+        try { validTarget = target.matches(F.EDITOR_PROXY) || inEditor(target); } catch { validTarget = false; }
+        if (!validTarget || seenEditors.has(target)) return;
+        seenEditors.add(target);
 
-        let root = e.target;
+        let root = target;
         for (let i = 0; i < 2 && root.parentElement && root.parentElement !== document.body && root.parentElement !== document.documentElement; i++) {
             root = root.parentElement;
         }
+        if (seenEditors.has(root)) return;
+        seenEditors.add(root);
+        lateEditorScans++;
 
         const els = [root, ...collectElements(root, 2000)];
         let added = false;
@@ -446,14 +545,31 @@
         sampling = true;
         st.sampledOnce = true;
 
-        const els = collectElements(document.body, SAMPLE_LIMIT);
-        let i = 0, added = false;
+        const stack = [document.body];
+        let walker = null, visited = 0, added = false;
 
         const chunk = () => {
             if (!cfg) { sampling = false; return; }
 
-            for (const end = Math.min(i + CHUNK, els.length); i < end; i++) added = processElement(els[i], inEditor(els[i])) || added;
-            if (i < els.length) { setTimeout(chunk, 0); return; }
+            editorPresentCache = null;
+            const editorState = hasEditor() ? null : false;
+            let step = 0;
+
+            while (step < CHUNK && visited < SAMPLE_LIMIT) {
+                if (!walker) {
+                    if (!stack.length) break;
+                    walker = document.createTreeWalker(stack.pop(), 1);
+                }
+                const el = walker.nextNode();
+                if (!el) { walker = null; continue; }
+
+                visited++;
+                step++;
+                if (el.shadowRoot) stack.push(el.shadowRoot);
+                if (processElement(el, editorState)) added = true;
+            }
+
+            if (visited < SAMPLE_LIMIT && (walker || stack.length)) { setTimeout(chunk, 0); return; }
 
             sampling = false;
             flushLearn();
@@ -467,10 +583,14 @@
     // Scheduling
     // ---------------------------------------------------------------------------------------------------------------
 
-    let timer = 0;
+    let timer = 0, runWindowStart = 0, runWindowCount = 0;
 
     function schedule(delay) {
         if (timer || !cfg) return;
+
+        const now = Date.now();
+        if (now - runWindowStart > 2000) { runWindowStart = now; runWindowCount = 0; }
+        if (runWindowCount >= 15) delay = Math.max(delay, 500);     // damp hostile mutation/event storms
 
         timer = setTimeout(() => { timer = 0; run(); }, delay);
     }
@@ -478,11 +598,14 @@
     function run() {
         if (!cfg) return;
 
+        runWindowCount++;
+        editorPresentCache = null;
         const changed = scanDocument() | readPageFaces();      // not ||: both must run
+        editorPresentCache = null;
 
         flushLearn();
         if (changed || st.lastCss === null || !st.bodyCat) rebuild();
-        if (changed) deleteFontFaces();
+        if (changed && st.faceRules.length) deleteFontFaces();
         if (changed || !st.sampledOnce) sample();
         st.initialDone = true;
     }
@@ -499,8 +622,11 @@
 
             if (document.head) {
                 new MutationObserver(mutations => {
-                    const styled = mutations.some(m => [...m.addedNodes].some(n => n.nodeName === "STYLE" || n.nodeName === "LINK"));
-                    if (styled) schedule(150);
+                    for (const m of mutations) {
+                        for (const n of m.addedNodes) {
+                            if (n.nodeName === "STYLE" || n.nodeName === "LINK") { schedule(150); return; }
+                        }
+                    }
                 }).observe(document.head, { childList: true });
             }
         };
@@ -536,13 +662,15 @@
 
     function configure(settings, bf, hints) {
         st = freshState();
+        runWindowCount = 0;
 
         if (!settings.enabled) return turnOff("disabled");
         if (matchesHosts(settings.excludedSites)) return turnOff("excluded");
 
         const { fonts, monoSize, monoScale } = F.resolveFonts(settings, bf);
         const chosenLower = new Set(CATS.map(c => norm(fonts[c].name)));
-        const hintNames = F.cleanNameList(hints[location.hostname]).filter(n => !chosenLower.has(norm(n)) && !lateNames.has(norm(n)));
+        const hostHints = hints && Object.hasOwn(hints, location.hostname) ? hints[location.hostname] : null;
+        const hintNames = F.cleanNameList(hostHints).filter(n => !chosenLower.has(norm(n)) && !lateNames.has(norm(n)));
 
         cfg = {
             settings, fonts, monoSize, monoScale, chosenLower, hintNames,
@@ -574,7 +702,7 @@
     // Editors on the page, named by element. A hidden input only counts when its font is monospace, so ordinary
     // search boxes (which share the same attributes) are not listed.
     function findEditors() {
-        const rootSel = [...F.EDITOR_ROOTS, ...cfg.settings.editors.selectors].join(",");
+        const rootSel = [...F.EDITOR_ROOTS, ...cfg.settings.editors.selectors.filter(F.validSelector)].join(",");
         const found = new Map();
         const add = el => {
             const name = describe(el);

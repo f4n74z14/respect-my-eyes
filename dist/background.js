@@ -59,7 +59,7 @@ async function migrate() {
     if (oldFonts && !all[F.KEYS.fonts]) move[F.KEYS.fonts] = oldFonts;
 
     if (Object.keys(move).length) await chrome.storage.local.set(move);
-    await chrome.storage.local.remove(F.KEYS.legacy);
+    if (oldSettings !== undefined || oldFonts !== undefined) await chrome.storage.local.remove(F.KEYS.legacy);
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -78,24 +78,30 @@ if (chrome.fontSettings) {
 
 // Editors reveal monospace fonts late; remember them for that site so its next load applies them from the first paint.
 // Serialized, because several frames can report at once and storage has no atomic read-modify-write.
+const MAX_TAB_HOSTS = 8;
+const MAX_TAB_LEARNS = 20;
+const MAX_TRACKED_TABS = 500;
+
 let learnChain = Promise.resolve();
-const tabLearned = new Map();   // tabId -> { hosts: Set, names: Set, reloaded: boolean }
+const tabLearned = new Map();   // tabId -> { hosts: Set, names: Set, learns: number, reloaded: boolean }
+
+const callQuiet = (fn, arg) => {
+    if (!fn) return;
+    try { Promise.resolve(fn(arg)).catch(() => {}); } catch {}
+};
 
 function setBadge(tabId, active) {
     if (tabId == null || !chrome.action) return;
-    try {
-        if (active) {
-            if (chrome.action.setBadgeBackgroundColor) chrome.action.setBadgeBackgroundColor({ tabId, color: "#EBCB8B" });
-            if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ tabId, color: "#2E3440" });
-            if (chrome.action.setBadgeText) chrome.action.setBadgeText({ tabId, text: "!" });
-            if (chrome.action.setTitle) chrome.action.setTitle({ tabId, title: "Respect My Eyes \u2014 Reload to apply font in editors" });
-        }
-        else {
-            if (chrome.action.setBadgeText) chrome.action.setBadgeText({ tabId, text: "" });
-            if (chrome.action.setTitle) chrome.action.setTitle({ tabId, title: "Respect My Eyes" });
-        }
+    if (active) {
+        callQuiet(chrome.action.setBadgeBackgroundColor, { tabId, color: "#EBCB8B" });
+        callQuiet(chrome.action.setBadgeTextColor, { tabId, color: "#2E3440" });
+        callQuiet(chrome.action.setBadgeText, { tabId, text: "!" });
+        callQuiet(chrome.action.setTitle, { tabId, title: "Respect My Eyes \u2014 Reload to apply font in editors" });
     }
-    catch { /* action API unavailable or tab already closed */ }
+    else {
+        callQuiet(chrome.action.setBadgeText, { tabId, text: "" });
+        callQuiet(chrome.action.setTitle, { tabId, title: "Respect My Eyes" });
+    }
 }
 
 function resetTab(tabId) {
@@ -113,28 +119,73 @@ if (chrome.tabs) {
     }
 }
 
-function learn(host, names, tabId) {
-    learnChain = learnChain.then(async () => {
-        const stored = await chrome.storage.local.get([F.KEYS.hints, F.KEYS.settings]);
-        const next = F.addHints(stored[F.KEYS.hints], host, names.slice(0, 20));
+function verifiedLearnHost(rawHost, sender) {
+    const host = F.cleanHostList([rawHost])[0];
+    if (!host) return "";
+    const originUrl = sender && (sender.origin || sender.url);
+    if (typeof originUrl === "string") {
+        if (originUrl === "null") return "";
+        try {
+            let protocol = "", hostname = "";
+            if (typeof URL !== "undefined") {
+                const u = new URL(originUrl);
+                protocol = u.protocol;
+                hostname = u.hostname;
+            } else {
+                const m = /^([a-z][a-z0-9+.-]*:)\/\/([^\/?#]+)/i.exec(originUrl.trim());
+                if (!m) return "";
+                protocol = m[1].toLowerCase();
+                hostname = m[2].replace(/^.*@/, "").replace(/:\d+$/, "");
+            }
+            if (protocol !== "http:" && protocol !== "https:") return "";
+            const senderHost = F.cleanHostList([hostname])[0];
+            if (!senderHost || senderHost !== host) return "";
+        }
+        catch { return ""; }
+    }
+    return host;
+}
 
-        if (!next) return;
-        await chrome.storage.local.set({ [F.KEYS.hints]: next });
+function getTabEntry(tabId) {
+    let entry = tabLearned.get(tabId);
+    if (!entry) {
+        if (tabLearned.size >= MAX_TRACKED_TABS) tabLearned.delete(tabLearned.keys().next().value);
+        entry = { hosts: new Set(), names: new Set(), learns: 0, reloaded: false };
+        tabLearned.set(tabId, entry);
+    }
+    return entry;
+}
+
+function learn(host, names, tabId) {
+    const cleanNames = F.cleanNameList(names.filter(n => typeof n === "string").slice(0, 24));
+    if (!cleanNames.length) return Promise.resolve();
+
+    learnChain = learnChain.then(async () => {
+        if (tabId != null) {
+            const entry = getTabEntry(tabId);
+            if (entry.learns >= MAX_TAB_LEARNS || (!entry.hosts.has(host) && entry.hosts.size >= MAX_TAB_HOSTS)) return;
+            if (entry.hosts.has(host) && cleanNames.every(n => entry.names.has(n))) return;
+            entry.learns++;
+            entry.hosts.add(host);
+            for (const n of cleanNames) entry.names.add(n);
+            setBadge(tabId, entry.names.size > 0);
+        }
+
+        const stored = await chrome.storage.local.get([F.KEYS.hints, F.KEYS.settings]);
+        const next = F.addHints(stored[F.KEYS.hints], host, cleanNames.slice(0, 20));
+        if (next) await chrome.storage.local.set({ [F.KEYS.hints]: next });
 
         if (tabId == null) return;
-        let entry = tabLearned.get(tabId);
-        if (!entry) { entry = { hosts: new Set(), names: new Set(), reloaded: false }; tabLearned.set(tabId, entry); }
-
-        const hostNorm = F.cleanHostList([host])[0];
-        if (hostNorm) entry.hosts.add(hostNorm);
-        for (const n of F.cleanNameList(names)) entry.names.add(n);
-        setBadge(tabId, entry.names.size > 0);
+        const entry = tabLearned.get(tabId);
+        if (!entry) return;
 
         const settings = F.normalizeSettings(stored[F.KEYS.settings]);
-        if (settings.enabled && settings.editors.protect && settings.editors.autoReload && !entry.reloaded && chrome.tabs && chrome.tabs.reload) {
+        if (settings.enabled && settings.editors.protect && settings.editors.autoReload &&
+            !F.isExcluded(host, settings.editors.offSites) && !entry.reloaded && chrome.tabs && chrome.tabs.reload) {
             entry.reloaded = true;
             setTimeout(() => {
-                try { Promise.resolve(chrome.tabs.reload(tabId)).catch(() => {}); } catch {}
+                if (tabLearned.get(tabId) !== entry) return;
+                callQuiet(chrome.tabs.reload, tabId);
             }, 120);
         }
     }).catch(() => { /* keep the chain alive */ });
@@ -142,25 +193,34 @@ function learn(host, names, tabId) {
     return learnChain;
 }
 
-chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-    const tabId = sender && sender.tab ? sender.tab.id : null;
+const safeReply = (reply, value) => {
+    if (!reply) return;
+    try { reply(value); } catch {}
+};
 
-    if (msg && msg.type === "rme:pageStart" && tabId != null) {
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+    if (!msg || typeof msg !== "object") return;
+    const tabId = sender && sender.tab ? sender.tab.id : null;
+    const isTopFrame = sender && (sender.frameId == null || sender.frameId === 0);
+
+    if (msg.type === "rme:pageStart" && tabId != null && isTopFrame) {
         resetTab(tabId);
-        reply && reply(true);
+        safeReply(reply, true);
         return;
     }
-    if (msg && msg.type === "rme:tabState") {
-        const entry = tabLearned.get(msg.tabId);
-        reply({ learned: entry ? [...entry.names] : [], hosts: entry ? [...entry.hosts] : [] });
+    if (msg.type === "rme:tabState" && !(sender && sender.tab)) {
+        const entry = typeof msg.tabId === "number" ? tabLearned.get(msg.tabId) : null;
+        safeReply(reply, { learned: entry ? [...entry.names] : [], hosts: entry ? [...entry.hosts] : [] });
         return;
     }
-    if (msg && msg.type === "rme:learn" && typeof msg.host === "string" && Array.isArray(msg.names)) {
-        learn(msg.host, msg.names, tabId).then(() => reply(true));
+    if (msg.type === "rme:learn" && typeof msg.host === "string" && Array.isArray(msg.names)) {
+        const host = verifiedLearnHost(msg.host, sender);
+        if (!host) return;
+        learn(host, msg.names, tabId).then(() => safeReply(reply, true));
         return true;
     }
-    if (msg && msg.type === "rme:refresh") {
-        refresh().then(reply, () => reply(null));
+    if (msg.type === "rme:refresh" && !(sender && sender.tab)) {
+        refresh().then(res => safeReply(reply, res), () => safeReply(reply, null));
         return true;
     }
 });
