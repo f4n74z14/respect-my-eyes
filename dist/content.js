@@ -22,7 +22,7 @@
     const { CATS, norm } = F;
     const isCat = cat => CATS.includes(cat);
 
-    const VAR_SCOPE = /^(:root|html|body)\b/i;
+    const VAR_SCOPE = /^(?::root|:host|html|body)\b|^:(?:where|is)\(\s*(?::root|:host|html|body)\b/i;
     const SAFE_VAR_PROP = /^--[a-zA-Z0-9_-]{1,120}$/;
     const CHUNK = 250;              // elements sampled per tick
     const SAMPLE_LIMIT = 6000;
@@ -55,6 +55,7 @@
         faceCss: new Map(),         // name|category -> generated @font-face rules
         processed: new WeakMap(),   // sheet -> number of rules already scanned
         unreadable: new WeakSet(),  // cross-origin sheets
+        scannedRoots: new WeakSet(),// open shadow roots whose stylesheets were scanned
         faces: new Map(),           // lower-case family -> { name, cat } to override
         pageFaces: new Map(),       // faces the page declared with non-standard descriptors
         faceKeys: new Set(),
@@ -224,11 +225,14 @@
                 if (!defer) decls += `${prop}:${familyOf(a.cat)}!important;`;
             }
         }
-        if (decls) st.vars.push(`${sel}{${decls}}`);
+        if (decls && !/^:host\b|^:(?:where|is)\(\s*:host\b/i.test(sel)) st.vars.push(`${sel}{${decls}}`);
     }
 
-    function onStyleRule(rule) {
-        const sel = rule.selectorText;
+    function onStyleRule(rule, parentSel) {
+        let sel = rule.selectorText;
+        if (sel && sel.includes("&") && parentSel && sel.length + parentSel.length < LIMITS.selectorLen) {
+            sel = sel.replaceAll("&", `:is(${parentSel})`);
+        }
         const ff = rule.style.fontFamily;
         const a = ff && analyze(ff);
 
@@ -242,25 +246,41 @@
              * ".mce-container *". So selectors are mirrored only where a name cannot be replaced: stacks made of
              * generic families (system-ui...), and monospace stacks, for the forced size.
              */
-            if (overridable(a) && safeRuleSelector(sel) && sel[0] !== "*" && (a.cat === "mono" || !a.names.length || a.firstGeneric) && st.sel[a.cat].size < LIMITS.selPerCat) {
+            if (overridable(a) && safeRuleSelector(sel) && sel[0] !== "*" && !sel.includes("&") && (a.cat === "mono" || !a.names.length || a.firstGeneric) && st.sel[a.cat].size < LIMITS.selPerCat) {
                 const safe = F.dropSweeps(sel);
                 if (safe) st.sel[a.cat].add(safe);
             }
         }
         if (sel && VAR_SCOPE.test(sel)) overrideCustomProps(rule);
+        return sel;
     }
 
-    function scanRule(rule, parent, depth, budget) {
+    function scanRule(rule, parent, depth, budget, parentSel = "") {
         if (budget.rules >= LIMITS.rulesPerScan) return;
         budget.rules++;
 
-        if (isRule(rule, "CSSStyleRule")) onStyleRule(rule);               // first: style rules can have nested rules
+        if (isRule(rule, "CSSStyleRule")) {
+            const resolvedSel = onStyleRule(rule, parentSel);
+            let nested = null;
+            if (depth < 6) { try { nested = rule.cssRules; } catch {} }
+            if (nested && nested.length) {
+                const nextParent = safeRuleSelector(resolvedSel) && !resolvedSel.includes("&") ? resolvedSel : "";
+                for (const child of nested) {
+                    if (budget.rules >= LIMITS.rulesPerScan) break;
+                    scanRule(child, rule, depth + 1, budget, nextParent);
+                }
+            }
+        }
         else if (isRule(rule, "CSSFontFaceRule")) { if (st.faceRules.length < LIMITS.faceRules) st.faceRules.push({ rule, parent }); }
         else if (isRule(rule, "CSSImportRule")) { if (rule.styleSheet && depth < 4) scanSheet(rule.styleSheet, depth + 1, budget); }
-        else if (depth < 6 && rule.cssRules && !isRule(rule, "CSSKeyframesRule")) {    // @media, @supports, @layer...
-            for (const child of rule.cssRules) {
-                if (budget.rules >= LIMITS.rulesPerScan) break;
-                scanRule(child, rule, depth + 1, budget);
+        else if (depth < 6 && !isRule(rule, "CSSKeyframesRule")) {    // @media, @supports, @layer...
+            let nested = null;
+            try { nested = rule.cssRules; } catch {}
+            if (nested) {
+                for (const child of nested) {
+                    if (budget.rules >= LIMITS.rulesPerScan) break;
+                    scanRule(child, rule, depth + 1, budget, parentSel);
+                }
             }
         }
     }
@@ -292,6 +312,21 @@
         let changed = false;
         const budget = { sheets: 0, rules: 0, seen: new WeakSet() };
         for (const list of [document.styleSheets, document.adoptedStyleSheets]) {
+            for (const sheet of list) {
+                if (budget.sheets >= LIMITS.sheetsPerScan || budget.rules >= LIMITS.rulesPerScan) return changed;
+                if (scanSheet(sheet, 0, budget)) changed = true;
+            }
+        }
+        return changed;
+    }
+
+    function scanShadowRoot(sr) {
+        if (!sr || st.scannedRoots.has(sr)) return false;
+        st.scannedRoots.add(sr);
+        let changed = false;
+        const budget = { sheets: 0, rules: 0, seen: new WeakSet() };
+        for (const list of [sr.styleSheets, sr.adoptedStyleSheets]) {
+            if (!list) continue;
             for (const sheet of list) {
                 if (budget.sheets >= LIMITS.sheetsPerScan || budget.rules >= LIMITS.rulesPerScan) return changed;
                 if (scanSheet(sheet, 0, budget)) changed = true;
@@ -442,19 +477,20 @@
     // ---------------------------------------------------------------------------------------------------------------
 
     // Light DOM plus open shadow roots (custom-element sites such as developers.google.com).
-    // Uses TreeWalker so traversal stops immediately at `limit` without allocating full NodeLists.
-    function collectElements(root, limit) {
-        const out = [], stack = [root];
+    // Streams elements to `fn` via TreeWalker so traversal stops immediately at `limit` with zero array allocation.
+    function walkElements(root, limit, fn) {
+        const stack = [root];
+        let visited = 0;
 
-        while (stack.length && out.length < limit) {
+        while (stack.length && visited < limit) {
             const walker = document.createTreeWalker(stack.pop(), 1);
             let el;
-            while (out.length < limit && (el = walker.nextNode())) {
-                out.push(el);
+            while (visited < limit && (el = walker.nextNode())) {
+                visited++;
                 if (el.shadowRoot) stack.push(el.shadowRoot);
+                fn(el);
             }
         }
-        return out;
     }
 
     const inEditor = el => !!cfg.protectSel && el.closest(cfg.protectSel) !== null;
@@ -527,20 +563,24 @@
         seenEditors.add(root);
         lateEditorScans++;
 
-        const els = [root, ...collectElements(root, 2000)];
-        let added = false;
-
-        for (const el of els) added = processElement(el, true) || added;
+        let added = processElement(root, true);
+        walkElements(root, 2000, el => {
+            if (el.shadowRoot && scanShadowRoot(el.shadowRoot)) added = true;
+            if (processElement(el, true)) added = true;
+        });
 
         flushLearn();
         if (added) commit();
     }
 
     let sampling = false, sampleAgain = false;
+    const nextIdle = typeof requestIdleCallback === "function"
+        ? fn => requestIdleCallback(fn, { timeout: 250 })
+        : fn => setTimeout(() => fn(null), 0);
 
     function sample() {
         if (sampling) { sampleAgain = true; return; }
-        if (!document.body) return;
+        if (!document.body || st.sampled.size >= LIMITS.sampled) return;
 
         sampling = true;
         st.sampledOnce = true;
@@ -548,14 +588,15 @@
         const stack = [document.body];
         let walker = null, visited = 0, added = false;
 
-        const chunk = () => {
+        const chunk = deadline => {
             if (!cfg) { sampling = false; return; }
 
             editorPresentCache = null;
             const editorState = hasEditor() ? null : false;
+            const idleMode = !!(deadline && !deadline.didTimeout);
             let step = 0;
 
-            while (step < CHUNK && visited < SAMPLE_LIMIT) {
+            while (visited < SAMPLE_LIMIT && st.sampled.size < LIMITS.sampled && (idleMode ? (step === 0 || deadline.timeRemaining() > 3) : step < CHUNK)) {
                 if (!walker) {
                     if (!stack.length) break;
                     walker = document.createTreeWalker(stack.pop(), 1);
@@ -565,18 +606,21 @@
 
                 visited++;
                 step++;
-                if (el.shadowRoot) stack.push(el.shadowRoot);
+                if (el.shadowRoot) {
+                    stack.push(el.shadowRoot);
+                    if (scanShadowRoot(el.shadowRoot)) added = true;
+                }
                 if (processElement(el, editorState)) added = true;
             }
 
-            if (visited < SAMPLE_LIMIT && (walker || stack.length)) { setTimeout(chunk, 0); return; }
+            if (visited < SAMPLE_LIMIT && st.sampled.size < LIMITS.sampled && (walker || stack.length)) { nextIdle(chunk); return; }
 
             sampling = false;
             flushLearn();
             if (added) commit();
             if (sampleAgain) { sampleAgain = false; sample(); }
         };
-        chunk();
+        chunk(null);
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -637,7 +681,7 @@
         document.addEventListener("animationstart", onEditorSeen, true);
         document.addEventListener("load", e => { if (e.target && e.target.nodeName === "LINK") schedule(0); }, true);    // its rules are readable now
         if (document.fonts) document.fonts.addEventListener("loadingdone", () => schedule(50));
-        window.addEventListener("load", () => { schedule(50); setTimeout(() => schedule(0), 500); });
+        window.addEventListener("load", () => { schedule(50); setTimeout(() => schedule(0), 500); }, { once: true });
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -731,10 +775,10 @@
 
         const counts = new Map();
 
-        for (const el of collectElements(root, REPORT_LIMIT)) {
+        walkElements(root, REPORT_LIMIT, el => {
             const ff = getComputedStyle(el).fontFamily;
             if (ff && ff.length <= LIMITS.valueLen) counts.set(ff, (counts.get(ff) || 0) + 1);
-        }
+        });
 
         const unknown = new Map();
 

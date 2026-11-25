@@ -26,8 +26,8 @@ Without the API, fallback fonts apply (Arial, Georgia, Courier New).
 
 Three independent sources, so a font is found however a site declares it:
 
-1. **Stylesheets**, walked through the CSSOM: `@media`, `@supports`, `@layer`, `@import`, and font stacks in custom properties defined on `:root`, `html` and `body`. Scanning is incremental per sheet.
-2. **Computed styles** of elements, sampled in chunks of 250 and de-duplicated by tag, class and inline style. Covers `var(--x)`, inline styles, open shadow DOM and CORS-blocked stylesheets.
+1. **Stylesheets**, walked through the CSSOM: `@media`, `@supports`, `@layer`, `@import`, CSS Nesting (`CSSStyleRule.cssRules`), open `shadowRoot` stylesheets, and font stacks in custom properties defined on `:root`, `:host`, `:where(:root)`, `html` and `body`. Scanning is incremental per sheet.
+2. **Computed styles** of elements, sampled via `requestIdleCallback` (with chunk fallback) and de-duplicated by tag, class and inline style hash. Covers `var(--x)`, inline styles, open shadow DOM and CORS-blocked stylesheets.
 3. **`document.fonts`**, which exposes descriptors even for blocked stylesheets and includes fonts created in JavaScript.
 
 Each family name is classified on its own (icon / sans / serif / mono) by keyword. A name without a keyword inherits the category of the stack's generic fallback. A stack with no generic fallback and an unknown name is reported to the popup as unclassified.
@@ -64,7 +64,7 @@ Editors measure the width of a character and cache it, then place the cursor fro
 - Sheets are scanned incrementally; a page with nothing new does no work.
 - Generated `@font-face` rules are cached per family and category; the CSS is rebuilt only when something new was found.
 - `document.fonts` is re-read only when its size changed.
-- Sampling is chunked and de-duplicated, so it never blocks the page.
+- Sampling uses `requestIdleCallback` with a 53-bit numeric element hash and stops immediately once the sample cap is reached, while DOM walks stream directly with zero array allocation.
 - Page scripts (`common.js` + `content.js`) are about 53 KB.
 
 ## Trade-offs

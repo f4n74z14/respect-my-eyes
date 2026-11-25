@@ -17,6 +17,7 @@
     let pending = 0;                // timer of a debounced save
     let savingCount = 0;            // in-flight storage.save() count to guard onChange against stale echoes
     let lastSavedJson = "";
+    let lastManualSig = "";
 
     // -----------------------------------------------------------------------------------------------------------------
     // Saving and undo
@@ -199,6 +200,10 @@
 
         $("count").textContent = query ? `${items.length} of ${plural(total, "font", "fonts")}` : plural(total, "font", "fonts");
 
+        const sig = `${query}\0${items.map(f => `${f.name}:${f.category}`).join("|")}`;
+        if (!flashKey && sig === lastManualSig && $("manualList").children.length) return;
+        lastManualSig = sig;
+
         if (!items.length) {
             $("manualList").replaceChildren(el("div", "empty", total ? "No fonts match." : "Nothing here yet. Add a font below or import a list."));
             return;
@@ -253,7 +258,7 @@
             const sel = e.target.closest("select");
             const row = sel && sel.closest(".list-row");
             const i = row ? findManual(row.dataset.key) : -1;
-            if (i > -1) { settings.manualFonts[i].category = sel.value; save(); }
+            if (i > -1) { settings.manualFonts[i].category = sel.value; lastManualSig = ""; save(); }
         };
 
         $("manualList").onclick = e => {

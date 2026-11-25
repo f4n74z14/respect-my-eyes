@@ -179,9 +179,10 @@ function learn(host, names, tabId) {
         const entry = tabLearned.get(tabId);
         if (!entry) return;
 
-        const settings = F.normalizeSettings(stored[F.KEYS.settings]);
-        if (settings.enabled && settings.editors.protect && settings.editors.autoReload &&
-            !F.isExcluded(host, settings.editors.offSites) && !entry.reloaded && chrome.tabs && chrome.tabs.reload) {
+        const raw = stored[F.KEYS.settings];
+        const ed = raw && typeof raw === "object" && raw.editors && typeof raw.editors === "object" ? raw.editors : null;
+        if ((!raw || raw.enabled !== false) && ed && ed.protect !== false && ed.autoReload === true &&
+            !F.isExcluded(host, F.cleanHostList(ed.offSites)) && !entry.reloaded && chrome.tabs && chrome.tabs.reload) {
             entry.reloaded = true;
             setTimeout(() => {
                 if (tabLearned.get(tabId) !== entry) return;

@@ -73,6 +73,7 @@ t("analyzes stacks", () => {
 
 t("custom property detection", () => {
     assert.ok(F.looksLikeFontStack('"Inter", system-ui, sans-serif', "--x"));
+    assert.ok(F.looksLikeFontStack('"Noto Sans JP", "メイリオ", sans-serif', "--font-jp"));
     assert.ok(F.looksLikeFontStack("Arial", "--font-body"));
     assert.ok(!F.looksLikeFontStack("16px", "--font-size"));
     assert.ok(!F.looksLikeFontStack("bold", "--font-weight"));

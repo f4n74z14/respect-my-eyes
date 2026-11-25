@@ -235,7 +235,7 @@
 
     // Does a custom property value (--font-foo: ...) look like a font stack?
     function looksLikeFontStack(value, prop) {
-        if (!/^[\w\s"'.,\-]+$/.test(value) || !/[a-z]/i.test(value)) return false;
+        if (!value || /[{};@\\()\r\n]/.test(value) || !/[a-z\p{L}]/iu.test(value)) return false;
 
         const parts = splitFamilies(value);
         const last = parts[parts.length - 1];
@@ -582,7 +582,8 @@
         delete next[host];                      // re-insert last: object keys keep insertion order
         next[host] = merged;
 
-        for (const old of Object.keys(next).slice(0, Math.max(0, Object.keys(next).length - HINT_LIMITS.hosts))) delete next[old];
+        const keys = Object.keys(next);
+        for (let i = 0; i < keys.length - HINT_LIMITS.hosts; i++) delete next[keys[i]];
         return next;
     }
 

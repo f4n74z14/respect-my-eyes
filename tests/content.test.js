@@ -338,5 +338,59 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.ok(!/@font-face\{font-family:"-apple-system"/i.test(sysCss) && !/@font-face\{font-family:"BlinkMacSystemFont"/i.test(sysCss), "no invalid/reserved @font-face generated for -apple-system or BlinkMacSystemFont");
   assert.ok(sysCss.includes(".apple-btn") && sysCss.includes('font-family:"Verdana", sans-serif!important'), "selector starting with -apple-system is mirrored directly");
 
+  // --- 11. Modern CSS Nesting, :where(:root)/:host vars, and open Shadow DOM stylesheet scanning ---
+  const modEnv = setup({ settings: undefined, bf: BF });
+  await wait(350);
+  // Simulate nested CSSStyleRule (rule.cssRules inside a CSSStyleRule) + :where(:root) vars + open shadowRoot sheet
+  const mkRule = o => {
+    Object.defineProperty(o, "cssRules", { value: o.cssRules || null, configurable: true });
+    return Object.setPrototypeOf(o, modEnv.w.CSSStyleRule.prototype);
+  };
+  const nestedChild = mkRule({
+    selectorText: "& .nested-sys",
+    style: { fontFamily: "system-ui, sans-serif", length: 0, getPropertyValue: () => "" }
+  });
+  const nestedNamed = mkRule({
+    selectorText: ".nested-card",
+    style: { fontFamily: '"Nested Display", sans-serif', length: 0, getPropertyValue: () => "" }
+  });
+  const parentStyleRule = mkRule({
+    selectorText: ".outer",
+    style: { fontFamily: "", length: 0, getPropertyValue: () => "" },
+    cssRules: [nestedChild, nestedNamed]
+  });
+  const whereVarRule = mkRule({
+    selectorText: ":where(:root)",
+    style: { fontFamily: "", 0: "--font-modern", length: 1, getPropertyValue: p => p === "--font-modern" ? '"Modern Sans", sans-serif' : "" }
+  });
+  const modSheet = { cssRules: [parentStyleRule, whereVarRule] };
+  const host = modEnv.w.document.createElement("div");
+  const sr = host.attachShadow({ mode: "open" });
+  const srRule = mkRule({
+    selectorText: ":host",
+    style: { fontFamily: "", 0: "--font-shadow", length: 1, getPropertyValue: p => p === "--font-shadow" ? '"Shadow Mono", monospace' : "" }
+  });
+  const srFace = mkRule({
+    selectorText: ".sh",
+    style: { fontFamily: '"Shadow Face", sans-serif', length: 0, getPropertyValue: () => "" }
+  });
+  Object.defineProperty(sr, "styleSheets", { value: [{ cssRules: [srRule, srFace] }], configurable: true });
+  modEnv.w.document.body.appendChild(host);
+  Object.defineProperty(modEnv.w.document, "adoptedStyleSheets", {
+    get: () => [modSheet, ...modEnv.adopted()],
+    set: () => {},
+    configurable: true
+  });
+  const trig = modEnv.w.document.createElement("style");
+  trig.textContent = ".trig { font-family: Arial; }";
+  modEnv.w.document.head.appendChild(trig);
+  await wait(350);
+  const modCss = modEnv.sheets()[1];
+  assert.ok(modCss.includes('font-family:"Nested Display"') && modCss.includes('local("Verdana")'), "nested CSSStyleRule font is extracted and overridden");
+  assert.ok(!/(^|[},\n])&\s*\.nested-sys/.test(modCss) && modCss.includes(":is(.outer) .nested-sys"), "nested & selector resolves against parent selector safely");
+  assert.ok(modCss.includes('--font-modern:"Verdana", sans-serif!important'), ":where(:root) custom property is overridden");
+  assert.ok(modCss.includes('font-family:"Shadow Face"') && modCss.includes('font-family:"Shadow Mono"'), "open shadowRoot stylesheets are scanned and overridden by family name");
+  assert.ok(!/(^|[}\n]):host\{/.test(modCss), "inert :host custom property rule is not emitted into document stylesheet");
+
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });
