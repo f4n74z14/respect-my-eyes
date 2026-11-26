@@ -648,10 +648,57 @@
         editorPresentCache = null;
 
         flushLearn();
+        if (cfg.settings.mono.textarea) syncTextareaMirrors();
         if (changed || st.lastCss === null || !st.bodyCat) rebuild();
         if (changed && st.faceRules.length) deleteFontFaces();
         if (changed || !st.sampledOnce) sample();
         st.initialDone = true;
+    }
+
+    const PRE_WS = /^(pre|break-spaces)/;
+
+    function clearTextareaMirrors() {
+        try { document.querySelectorAll("[data-rme-mirror]").forEach(el => el.removeAttribute("data-rme-mirror")); } catch {}
+    }
+
+    // Tag overlapping DOM overlay backdrops (e.g. highlight-within-textarea / custom caret mirrors) so mono.textarea
+    // styles both the <textarea> and its mirror identically without ever touching icon elements.
+    function syncTextareaMirrors(onlyTa) {
+        if (!cfg || !cfg.settings.mono.textarea || !document.body) return;
+        let list;
+        if (onlyTa) list = [onlyTa];
+        else {
+            try { list = document.querySelectorAll("textarea"); } catch { return; }
+        }
+        const limit = Math.min(list.length, 20);
+        for (let i = 0; i < limit; i++) {
+            const ta = list[i];
+            if (!ta || ta.nodeType !== 1 || inEditor(ta)) continue;
+            let tr;
+            try { tr = ta.getBoundingClientRect(); } catch { continue; }
+            if (!tr || tr.width < 40 || tr.height < 16) continue;
+
+            let scope = ta.parentElement;
+            for (let depth = 0; depth < 2 && scope && scope !== document.body && scope !== document.documentElement; depth++, scope = scope.parentElement) {
+                for (const child of scope.children) {
+                    if (child === ta || child.contains(ta) || child.hasAttribute("data-rme-mirror")) continue;
+                    if (child.nodeName === "BUTTON" || child.nodeName === "INPUT" || child.nodeName === "SELECT" || child.nodeName === "SVG") continue;
+                    const explicitCaret = child.hasAttribute("animating-caret") || (child.hasAttribute("data-before") && child.hasAttribute("data-after"));
+                    const hiddenOrPass = child.getAttribute("aria-hidden") === "true" || getComputedStyle(child).pointerEvents === "none";
+                    if (!explicitCaret && !hiddenOrPass) continue;
+
+                    let er;
+                    try { er = child.getBoundingClientRect(); } catch { continue; }
+                    if (Math.abs(er.left - tr.left) > 10 || Math.abs(er.top - tr.top) > 10 ||
+                        Math.abs(er.width - tr.width) > 24 || Math.abs(er.height - tr.height) > 24) continue;
+                    if (!explicitCaret) {
+                        if (child.querySelector("svg,button,input,select")) continue;
+                        if (!PRE_WS.test(getComputedStyle(child).whiteSpace)) continue;
+                    }
+                    child.setAttribute("data-rme-mirror", "");
+                }
+            }
+        }
     }
 
     let listening = false;
@@ -679,6 +726,9 @@
         else start();
 
         document.addEventListener("animationstart", onEditorSeen, true);
+        document.addEventListener("focusin", e => {
+            if (cfg && cfg.settings.mono.textarea && e.target && e.target.nodeName === "TEXTAREA") syncTextareaMirrors(e.target);
+        }, true);
         document.addEventListener("load", e => { if (e.target && e.target.nodeName === "LINK") schedule(0); }, true);    // its rules are readable now
         if (document.fonts) document.fonts.addEventListener("loadingdone", () => schedule(50));
         window.addEventListener("load", () => { schedule(50); setTimeout(() => schedule(0), 500); }, { once: true });
@@ -689,16 +739,17 @@
     // ---------------------------------------------------------------------------------------------------------------
 
     // Editors are found automatically (RME.editorBoundary); needs @scope and :has(), i.e. Chrome 118+
-    function editorSelector(editors) {
+    function editorSelector(editors, textareaMono) {
         if (!editors.protect || matchesHosts(editors.offSites) || typeof CSSScopeRule === "undefined") return "";
 
-        const sel = F.editorBoundary(editors.selectors.filter(F.validSelector));
+        const sel = F.editorBoundary(editors.selectors.filter(F.validSelector), !textareaMono);
         return F.validSelector(sel) ? sel : "";
     }
 
     function turnOff(reason) {
         cfg = null;
         offReason = reason;
+        clearTextareaMirrors();
         baseSink.set("");
         siteSink.set("");
         attach();
@@ -710,6 +761,7 @@
 
         if (!settings.enabled) return turnOff("disabled");
         if (matchesHosts(settings.excludedSites)) return turnOff("excluded");
+        if (!settings.mono.textarea) clearTextareaMirrors();
 
         const { fonts, monoSize, monoScale } = F.resolveFonts(settings, bf);
         const chosenLower = new Set(CATS.map(c => norm(fonts[c].name)));
@@ -719,7 +771,7 @@
         cfg = {
             settings, fonts, monoSize, monoScale, chosenLower, hintNames,
             matchers: F.buildMatchers(settings),
-            protectSel: editorSelector(settings.editors),
+            protectSel: editorSelector(settings.editors, settings.mono.textarea),
             editorsOffSite: matchesHosts(settings.editors.offSites),
             // everything declared in the base sheet, i.e. in place before any page script runs
             preFaces: new Set(hintNames.map(norm))

@@ -80,7 +80,7 @@ Editors measure the width of a character and cache it, then place the cursor fro
 | Opt-in one-shot auto-reload (`editors.autoReload`) | Applies the user's font in newly discovered editors on Visit 1 without manual reload | Causes one brief automatic reload on the first visit to a new editor site; kept off by default |
 | Declare listed fonts on demand | Cost independent of the list length | A listed font is replaced at the first scan (as soon as a stylesheet loads), not at `document_start` |
 | `@scope` and `:has()` for protection | Pure CSS, no DOM changes | Needs Chromium 118+ |
-| Text boxes are not forced to monospace | No drift on mirrored text boxes | Users who want it must switch it on |
+| Text boxes are not forced to monospace | No drift on mirrored text boxes by default | Users who want it must switch it on; when enabled, paired DOM mirrors (`[animating-caret]`, `[data-before][data-after]`, and overlapping pre-wrapped overlays) are synchronized automatically |
 | Four static faces per family | Small CSS | Other weights rely on the browser's nearest match unless the page declares them |
 | Undo instead of confirm dialogs | Faster, safer editing | Changes apply before they are confirmed |
 

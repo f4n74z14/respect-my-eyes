@@ -392,5 +392,32 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.ok(modCss.includes('font-family:"Shadow Face"') && modCss.includes('font-family:"Shadow Mono"'), "open shadowRoot stylesheets are scanned and overridden by family name");
   assert.ok(!/(^|[}\n]):host\{/.test(modCss), "inert :host custom property rule is not emitted into document stylesheet");
 
+  // --- 12. Mirrored textareas: protected when mono.textarea is off, synced cleanly when mono.textarea is on ---
+  const mirOff = setup({ settings: { version: 4, mono: { textarea: false } }, bf: BF, editor: true });
+  await wait(350);
+  assert.ok(mirOff.sheets()[0].includes(":has(> textarea):has(> :is([animating-caret],[data-before][data-after]))"), "caret-mirror containers are protected by @scope when textarea forcing is off");
+
+  const mirOn = setup({ settings: { version: 4, mono: { textarea: true } }, bf: BF, editor: true });
+  const wrap = mirOn.w.document.createElement("div");
+  wrap.innerHTML =
+    '<textarea class="ITIRGe"></textarea>' +
+    '<div class="CEpIFc" data-before="fff" data-after="fff" aria-hidden="true" animating-caret=""></div>' +
+    '<div class="backdrop" aria-hidden="true" style="white-space: pre-wrap;">fff</div>' +
+    '<button type="button" aria-hidden="true"><svg></svg></button>';
+  mirOn.w.document.body.appendChild(wrap);
+  const taEl = wrap.querySelector("textarea");
+  const backdrop = wrap.querySelector(".backdrop");
+  const iconBtn = wrap.querySelector("button");
+  const rect = { left: 10, top: 20, width: 300, height: 24 };
+  taEl.getBoundingClientRect = () => rect;
+  backdrop.getBoundingClientRect = () => rect;
+  iconBtn.getBoundingClientRect = () => rect;
+  await wait(350);
+  const mirBase = mirOn.sheets()[0];
+  assert.ok(mirBase.includes("code *,textarea{") && mirBase.includes("[animating-caret],[data-before][data-after]") && mirBase.includes("font-variant-ligatures:none!important;font-kerning:none!important"), "mono.textarea syncs caret mirrors and disables ligatures/kerning drift");
+  assert.ok(!mirBase.includes(":has(> textarea):has(> :is([animating-caret],[data-before][data-after]))"), "caret mirrors are NOT excluded from @scope when mono.textarea is enabled");
+  assert.strictEqual(backdrop.hasAttribute("data-rme-mirror"), true, "overlapping pre-wrapped backdrop mirror is tagged for sync");
+  assert.strictEqual(iconBtn.hasAttribute("data-rme-mirror"), false, "icon button in the same wrapper is left untouched");
+
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

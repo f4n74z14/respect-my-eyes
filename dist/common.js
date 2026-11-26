@@ -82,10 +82,13 @@
      */
     const EDITOR_PROXY = ':is(textarea,[contenteditable],[role="textbox"])[autocorrect="off"][spellcheck="false"]';
     const EDITOR_ROOTS = [".monaco-editor", ".cm-editor", ".CodeMirror", ".ace_editor", ".xterm"];
+    const CARET_MIRROR_SCOPE = ':has(> textarea):has(> :is([animating-caret],[data-before][data-after]))';
 
-    function editorBoundary(extra) {
+    function editorBoundary(extra, protectCaretMirrors) {
         const P = EDITOR_PROXY;
-        return [P, ":has(> " + P + ")", ":has(> * > " + P + ")"].concat(EDITOR_ROOTS, extra || []).join(",");
+        const parts = [P, ":has(> " + P + ")", ":has(> * > " + P + ")"];
+        if (protectCaretMirrors) parts.push(CARET_MIRROR_SCOPE);
+        return parts.concat(EDITOR_ROOTS, extra || []).join(",");
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -552,10 +555,17 @@
         return selectors + "{font-family:" + familyValue("mono", cfg.fonts) + "!important;" + monoSizeDecl(cfg) + "}";
     }
 
+    const TEXTAREA_MIRROR = ":has(> textarea) > :is([animating-caret],[data-before][data-after]),textarea ~ :is([animating-caret],[data-before][data-after]),[data-rme-mirror],[data-rme-mirror] *";
+    const TEXTAREA_MIRROR_PSEUDO = ":has(> textarea) > :is([animating-caret],[data-before][data-after])::before,:has(> textarea) > :is([animating-caret],[data-before][data-after])::after,textarea ~ :is([animating-caret],[data-before][data-after])::before,textarea ~ :is([animating-caret],[data-before][data-after])::after,[data-rme-mirror]::before,[data-rme-mirror]::after";
+
     function monoDefaultsCss(cfg) {
         let sel = "pre,code,kbd,samp,pre *,code *";
-        if (cfg.settings.mono.textarea) sel += ",textarea";
-        return monoRule(sel, cfg);
+        if (!cfg.settings.mono.textarea) return monoRule(sel, cfg);
+
+        sel += ",textarea";
+        const mirrors = TEXTAREA_MIRROR + "," + TEXTAREA_MIRROR_PSEUDO;
+        return monoRule(sel, cfg) + "\n" + monoRule(mirrors, cfg) +
+            "\ntextarea," + mirrors + "{font-variant-ligatures:none!important;font-kerning:none!important;}";
     }
 
     /*
