@@ -522,6 +522,24 @@
         return !!b && b[0] === b[1] && WEIGHTS.indexOf(b[0]) > -1 && /^(normal|italic)$/.test(d.style) && /^(normal|100%)$/.test(d.stretch || "normal");
     }
 
+    function fontFaceVariants(cat, fontName, scalePct, d) {
+        const weight = String(d.weight), style = String(d.style), stretch = String(d.stretch || "normal");
+        const b = weightBounds(weight);
+
+        if (!b || weight.length > 40 || style.length > 40 || stretch.length > 40 ||
+            !/^[\d.\s]+$|^(normal|bold)$/.test(weight) || !/^[a-z0-9 .\-]+$/i.test(style) || !/^[a-z0-9 .%\-]+$/i.test(stretch)) return null;
+
+        const italic = /^(italic|oblique)/i.test(style);
+        const adj = cat === "mono" && scalePct ? scalePct : null;
+        const out = [{ weight, style, stretch, src: srcFor(fontName, b[0] >= 600, italic), scalePct: adj }];
+
+        if (b[0] < 600 && b[1] >= 600) {      // a range spanning both: also offer a real bold for the upper half
+            out.push({ weight: b[0] + " 599", style, stretch, src: srcFor(fontName, false, italic), scalePct: adj });
+            out.push({ weight: "600 " + b[1], style, stretch, src: srcFor(fontName, true, italic), scalePct: adj });
+        }
+        return out;
+    }
+
     /*
      * Replicates the descriptors of a face the PAGE declared (read from document.fonts, which works even when the
      * stylesheet itself is blocked by CORS). Identical descriptors make the browser merge our face with the page's
@@ -529,21 +547,27 @@
      * Values come from the page, so they are validated before being put into CSS.
      */
     function fontFaceExtraCss(family, cat, fontName, scalePct, d) {
-        const weight = String(d.weight), style = String(d.style), stretch = String(d.stretch || "normal");
-        const b = weightBounds(weight);
+        const variants = fontFaceVariants(cat, fontName, scalePct, d);
+        if (!variants) return "";
 
-        if (!b || weight.length > 40 || style.length > 40 || stretch.length > 40 ||
-            !/^[\d.\s]+$|^(normal|bold)$/.test(weight) || !/^[a-z0-9 .\-]+$/i.test(style) || !/^[a-z0-9 .%\-]+$/i.test(stretch)) return "";
+        const fam = cssQuote(family);
+        return variants.map(function (v) {
+            return faceRule(fam, v.weight, v.style, v.stretch, v.src, v.scalePct ? "size-adjust:" + v.scalePct + "%;" : "");
+        }).join("\n");
+    }
 
-        const fam = cssQuote(family), adjust = adjustDecl(cat, scalePct);
-        const italic = /^(italic|oblique)/i.test(style);
-        const out = [faceRule(fam, weight, style, stretch, srcFor(fontName, b[0] >= 600, italic), adjust)];
+    // Builds descriptor specs for JS `new FontFace(family, source, descriptors)` shadows added to document.fonts,
+    // which otherwise outrank CSS @font-face rules in Chromium's font cascade.
+    function jsFontFaceSpecs(family, cat, fontName, scalePct, d) {
+        const fam = cleanFontName(family);
+        const variants = fam && fontFaceVariants(cat, fontName, scalePct, d);
+        if (!variants) return [];
 
-        if (b[0] < 600 && b[1] >= 600) {      // a range spanning both: also offer a real bold for the upper half
-            out.push(faceRule(fam, b[0] + " 599", style, stretch, srcFor(fontName, false, italic), adjust));
-            out.push(faceRule(fam, "600 " + b[1], style, stretch, srcFor(fontName, true, italic), adjust));
-        }
-        return out.join("\n");
+        return variants.map(function (v) {
+            const desc = { weight: v.weight, style: v.style, stretch: v.stretch };
+            if (v.scalePct) desc.sizeAdjust = v.scalePct + "%";
+            return { family: fam, source: v.src.join(","), descriptors: desc };
+        });
     }
 
     function monoSizeDecl(cfg) {
@@ -630,6 +654,6 @@
         // font names
         norm, cssQuote, isReservedFamily, buildMatchers, classifyName, splitFamilies, analyzeStack, looksLikeFontStack,
         // css
-        editorBoundary, splitSelectorList, dropSweeps, validSelector, familyValue, fontFaceCss, fontFaceExtraCss, isStandardFace, monoRule, monoDefaultsCss
+        editorBoundary, splitSelectorList, dropSweeps, validSelector, familyValue, fontFaceCss, fontFaceExtraCss, jsFontFaceSpecs, isStandardFace, monoRule, monoDefaultsCss
     };
 })(typeof self !== "undefined" ? self : this);

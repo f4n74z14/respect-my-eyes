@@ -65,9 +65,33 @@ function setup({ settings, bf, hints, fonts = [], editor = false, host = "https:
   let adopted = [];
   Object.defineProperty(w.document, "adoptedStyleSheets", { get: () => adopted, set: v => { adopted = Array.from(v); }, configurable: true });
 
+  w.FontFace = class {
+    constructor(family, source, d = {}) {
+      this.family = family; this.source = source;
+      this.weight = d.weight || "400"; this.style = d.style || "normal"; this.stretch = d.stretch || "normal";
+      this.sizeAdjust = d.sizeAdjust; this.status = "loaded"; this.__js = true;
+    }
+  };
+
   w.__fonts = fonts;
+  w.__fontListeners = {};
   w.__sent = [];
-  Object.defineProperty(w.document, "fonts", { value: { forEach: cb => w.__fonts.forEach(cb), addEventListener() {} }, configurable: true });
+  Object.defineProperty(w.document, "fonts", {
+    value: {
+      get size() { return w.__fonts.length; },
+      forEach: cb => w.__fonts.slice().forEach(cb),
+      add: f => { if (!w.__fonts.includes(f)) w.__fonts.push(f); },
+      delete: f => {
+        if (!f || !f.__js) return false;
+        const idx = w.__fonts.indexOf(f);
+        if (idx === -1) return false;
+        w.__fonts.splice(idx, 1);
+        return true;
+      },
+      addEventListener: (ev, fn) => { (w.__fontListeners[ev] = w.__fontListeners[ev] || []).push(fn); }
+    },
+    configurable: true
+  });
 
   const store = { settings, browserFonts: bf };
   const listeners = [];
@@ -418,6 +442,39 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.ok(!mirBase.includes(":has(> textarea):has(> :is([animating-caret],[data-before][data-after]))"), "caret mirrors are NOT excluded from @scope when mono.textarea is enabled");
   assert.strictEqual(backdrop.hasAttribute("data-rme-mirror"), true, "overlapping pre-wrapped backdrop mirror is tagged for sync");
   assert.strictEqual(iconBtn.hasAttribute("data-rme-mirror"), false, "icon button in the same wrapper is left untouched");
+
+  // --- 13. Programmatic JS FontFace shadowing, quote stripping, loadingdone DOM resample, and turnOff cleanup ---
+  const sitePlayfair = { family: '"Playfair Display"', weight: "400", style: "normal", stretch: "normal", status: "loaded", __js: true };
+  const siteAleo = { family: "Aleo", weight: "400", style: "normal", stretch: "normal", status: "loading", __js: true };
+  const siteIcon = { family: "FontAwesome", weight: "400", style: "normal", stretch: "normal", status: "loaded", __js: true };
+  const jsEnv = setup({ settings: undefined, bf: BF, fonts: [sitePlayfair, siteAleo, siteIcon] });
+  await wait(400);
+
+  const shadows1 = jsEnv.w.__fonts.filter(f => f.source && String(f.source).startsWith('local("'));
+  assert.ok(shadows1.some(f => f.family === "Playfair Display" && f.source.includes('local("Georgia")')), "unquoted JS shadow injected for quoted programmatic FontFace");
+  assert.ok(!shadows1.some(f => /FontAwesome/i.test(f.family)), "icon JS FontFace is not shadowed");
+  assert.ok(!shadows1.some(f => f.family === "Aleo"), "loading/unclassified JS FontFace waits until loaded and matched to DOM fallback");
+
+  // Late expanded/virtualized specimen appears with inline fallback stack and Aleo finishes loading
+  const lateSpec = jsEnv.w.document.createElement("div");
+  lateSpec.setAttribute("style", "font-family: Aleo, Georgia, serif");
+  lateSpec.textContent = "Specimen";
+  jsEnv.w.document.body.appendChild(lateSpec);
+  siteAleo.status = "loaded";
+  (jsEnv.w.__fontListeners.loadingdone || []).forEach(fn => fn({}));
+  await wait(400);
+
+  const shadows2 = jsEnv.w.__fonts.filter(f => f.source && String(f.source).startsWith('local("'));
+  assert.ok(shadows2.some(f => f.family === "Aleo" && f.source.includes('local("Georgia")')), "loadingdone triggers resample so unclassified late specimen JS FontFace is shadowed");
+  assert.ok(jsEnv.w.__fonts.indexOf(shadows2.find(f => f.family === "Aleo")) > jsEnv.w.__fonts.indexOf(siteAleo), "shadow FontFace sits after the site's JS FontFace");
+
+  // Disabling the extension removes our JS FontFace shadows while preserving the site's own FontFace entries
+  jsEnv.store.settings = { enabled: false };
+  jsEnv.listeners.forEach(fn => fn({ rmeSettings: {} }, "local"));
+  await wait(200);
+  const remaining = jsEnv.w.__fonts;
+  assert.ok(remaining.includes(sitePlayfair) && remaining.includes(siteAleo), "disabling preserves the site's original JS FontFace entries");
+  assert.ok(!remaining.some(f => f.source && String(f.source).startsWith('local("')), "disabling removes all injected JS FontFace shadows");
 
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

@@ -252,4 +252,21 @@ t("security hardening limits", () => {
     assert.strictEqual(F.fontFaceExtraCss("X", "sans", "Arial", null, { weight: "1 ".repeat(25), style: "normal", stretch: "normal" }), "", "overlong weight descriptor rejected");
 });
 
+t("builds JS FontFace specs", () => {
+    const std = F.jsFontFaceSpecs('"Playfair Display"', "serif", "Georgia", 81.25, { weight: "400", style: "normal", stretch: "normal" });
+    assert.deepStrictEqual(std, [{
+        family: "Playfair Display",
+        source: 'local("Georgia"),local("Georgia Regular")',
+        descriptors: { weight: "400", style: "normal", stretch: "normal" }
+    }]);
+
+    const varMono = F.jsFontFaceSpecs("JetBrains Mono", "mono", "Consolas", 81.25, { weight: "100 800", style: "italic", stretch: "100%" });
+    assert.strictEqual(varMono.length, 3, "splits variable weight spanning 600 into regular + bold halves");
+    assert.strictEqual(varMono[0].descriptors.sizeAdjust, "81.25%");
+    assert.strictEqual(varMono[2].descriptors.weight, "600 800");
+    assert.ok(varMono[2].source.includes('local("Consolas Bold Italic")'));
+
+    assert.deepStrictEqual(F.jsFontFaceSpecs("Evil", "sans", "Arial", null, { weight: "400;bad", style: "normal", stretch: "normal" }), []);
+});
+
 console.log("common.test.js: " + n + " groups passed");

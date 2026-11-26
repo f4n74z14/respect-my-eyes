@@ -50,20 +50,29 @@
     let cfg = null;                 // resolved configuration, null while disabled or excluded
     let offReason = "disabled";
 
+    const ourFaces = new WeakSet();
+    const checkedJsFaces = new WeakMap();
+
     const freshState = () => ({
         analysis: new Map(),        // font-family value -> analysis
         faceCss: new Map(),         // name|category -> generated @font-face rules
         processed: new WeakMap(),   // sheet -> number of rules already scanned
         unreadable: new WeakSet(),  // cross-origin sheets
         scannedRoots: new WeakSet(),// open shadow roots whose stylesheets were scanned
+        seenFaces: new WeakSet(),   // FontFace instances already indexed in this run
         faces: new Map(),           // lower-case family -> { name, cat } to override
         pageFaces: new Map(),       // faces the page declared with non-standard descriptors
+        jsFaces: new Map(),         // JS-added FontFace descriptors (unconnected to CSS rules)
+        ourJs: new Map(),           // key -> FontFace[] we added to document.fonts (removed on turnOff/configure)
         faceKeys: new Set(),
         faceRules: [],              // page @font-face rules that may have to be removed
         sel: { sans: new Set(), serif: new Set(), mono: new Set() },
         vars: [],                   // custom property overrides
         sampled: new Set(),
         sampledOnce: false,
+        needsResample: false,
+        fontsDirty: false,
+        syncJs: false,
         initialDone: false,
         fontCount: -1,
         bodyCat: null,
@@ -152,6 +161,7 @@
         }
         if (st.faces.size >= LIMITS.faces) return false;
         st.faces.set(lower, { name, cat });
+        if (st.jsFaces.size) st.syncJs = true;
         return true;
     }
 
@@ -368,31 +378,64 @@
         }
     }
 
+    // CSS-backed FontFace objects return false on fonts.delete(f), while JS-added FontFace objects return true.
+    // Re-adding f keeps site references intact and lets syncJsFaces() append our shadow FontFace after it.
+    function isJsFontFace(f, fonts) {
+        if (ourFaces.has(f)) return false;
+        if (checkedJsFaces.has(f)) return checkedJsFaces.get(f);
+        if (f.status === "loading" || typeof fonts.delete !== "function") return false;
+
+        let isJs = false;
+        try {
+            isJs = fonts.delete(f);
+            if (isJs && typeof fonts.add === "function") fonts.add(f);
+        }
+        catch { isJs = false; }
+        checkedJsFaces.set(f, isJs);
+        return isJs;
+    }
+
     // Faces the page declared, read from document.fonts: works for blocked stylesheets and for FontFace() made in JS
     function readPageFaces() {
         const fonts = document.fonts;
-        if (!fonts || (fonts.size !== undefined && fonts.size === st.fontCount)) return false;
+        if (!fonts || (!st.fontsDirty && fonts.size !== undefined && fonts.size === st.fontCount)) return false;
 
+        st.fontsDirty = false;
         st.fontCount = fonts.size;
         let changed = false, scanned = 0;
 
+        const batch = [];
         fonts.forEach(f => {
-            if (++scanned > LIMITS.pageFaces * 2) return;
+            if (++scanned > LIMITS.pageFaces * 2 || ourFaces.has(f) || st.seenFaces.has(f)) return;
+            if (f.status === "loading") return;             // wait for loadingdone before inspecting/probing
+            st.seenFaces.add(f);
+            batch.push(f);
+        });
+
+        for (const f of batch) {
             const family = unquote(String(f.family || "")).slice(0, 200);
             const lower = norm(family);
-            if (!lower) return;
+            if (!lower) continue;
+
             const weight = String(f.weight || "").slice(0, 40), style = String(f.style || "").slice(0, 40), stretch = String(f.stretch || "").slice(0, 40);
             const key = `${lower}|${weight}|${style}|${stretch}`;
-
-            if (st.faceKeys.size >= LIMITS.pageFaces * 2 || st.faceKeys.has(key)) return;           // also skips our own faces, which show up here too
-            st.faceKeys.add(key);
-
+            const isJs = isJsFontFace(f, fonts);
             const desc = { family, lower, weight, style, stretch };
-            if (!F.isStandardFace(desc) && st.pageFaces.size < LIMITS.pageFaces) { st.pageFaces.set(key, desc); changed = true; }
+
+            if (isJs && st.jsFaces.size < LIMITS.pageFaces && !st.jsFaces.has(key)) {
+                st.jsFaces.set(key, desc);
+                st.syncJs = true;
+                changed = true;
+            }
+            if (!st.faceKeys.has(key) && st.faceKeys.size < LIMITS.pageFaces * 2) {
+                st.faceKeys.add(key);
+                if (!F.isStandardFace(desc) && st.pageFaces.size < LIMITS.pageFaces) { st.pageFaces.set(key, desc); changed = true; }
+            }
 
             const cat = F.classifyName(lower, cfg.matchers);
             if (registerFace(family, lower, cat, st.initialDone && hasEditor())) changed = true;
-        });
+            else if (!cat && !F.isReservedFamily(lower) && !cfg.chosenLower.has(lower) && !st.faces.has(lower) && !lateNames.has(lower)) st.needsResample = true;
+        }
         return changed;
     }
 
@@ -455,14 +498,66 @@
         return out.join("\n");
     }
 
+    function clearJsFaces() {
+        if (!st || !st.ourJs.size || !document.fonts || typeof document.fonts.delete !== "function") return;
+        st.ourJs.forEach(list => list.forEach(jf => { try { document.fonts.delete(jf); } catch {} }));
+        st.ourJs.clear();
+    }
+
+    function trackOwnFaces(fn) {
+        const fonts = document.fonts;
+        if (!fonts || typeof fonts.forEach !== "function") { fn(); return; }
+        const prev = new Set();
+        fonts.forEach(f => prev.add(f));
+        fn();
+        if (fonts.size > prev.size) {
+            fonts.forEach(f => { if (!prev.has(f)) ourFaces.add(f); });
+            if (st.fontCount >= 0) st.fontCount = fonts.size;
+        }
+    }
+
+    function syncJsFaces() {
+        st.syncJs = false;
+        const fonts = document.fonts;
+        if (!st.jsFaces.size || typeof FontFace !== "function" || !fonts || typeof fonts.add !== "function") return;
+
+        let added = false;
+        st.jsFaces.forEach((pf, key) => {
+            if (st.ourJs.has(key) || cfg.chosenLower.has(pf.lower) || lateNames.has(pf.lower)) return;
+            const known = st.faces.get(pf.lower);
+            const cat = known ? known.cat : cfg.matchers.manual.get(pf.lower);
+            if (!isCat(cat)) return;
+
+            const specs = F.jsFontFaceSpecs(pf.family, cat, cfg.fonts[cat].name, cfg.monoScale, pf);
+            if (!specs.length) return;
+
+            const created = [];
+            for (const s of specs) {
+                try {
+                    const jf = new FontFace(s.family, s.source, s.descriptors);
+                    ourFaces.add(jf);
+                    fonts.add(jf);
+                    created.push(jf);
+                    added = true;
+                }
+                catch { /* invalid descriptor in mock/legacy env */ }
+            }
+            if (created.length) st.ourJs.set(key, created);
+        });
+        if (added) st.fontCount = fonts.size;
+    }
+
     function rebuild() {
         const css = buildSiteCss();
 
-        if (css !== st.lastCss) {
-            st.lastCss = css;
-            siteSink.set(css);
-        }
-        attach();
+        trackOwnFaces(() => {
+            if (css !== st.lastCss) {
+                st.lastCss = css;
+                siteSink.set(css);
+            }
+            attach();
+        });
+        syncJsFaces();
     }
 
     // New families were found: regenerate the CSS and drop the page's competing rules
@@ -616,6 +711,7 @@
             if (visited < SAMPLE_LIMIT && st.sampled.size < LIMITS.sampled && (walker || stack.length)) { nextIdle(chunk); return; }
 
             sampling = false;
+            st.needsResample = false;
             flushLearn();
             if (added) commit();
             if (sampleAgain) { sampleAgain = false; sample(); }
@@ -649,9 +745,9 @@
 
         flushLearn();
         if (cfg.settings.mono.textarea) syncTextareaMirrors();
-        if (changed || st.lastCss === null || !st.bodyCat) rebuild();
+        if (changed || st.lastCss === null || !st.bodyCat || st.syncJs) rebuild();
         if (changed && st.faceRules.length) deleteFontFaces();
-        if (changed || !st.sampledOnce) sample();
+        if (changed || !st.sampledOnce || st.needsResample) sample();
         st.initialDone = true;
     }
 
@@ -730,7 +826,7 @@
             if (cfg && cfg.settings.mono.textarea && e.target && e.target.nodeName === "TEXTAREA") syncTextareaMirrors(e.target);
         }, true);
         document.addEventListener("load", e => { if (e.target && e.target.nodeName === "LINK") schedule(0); }, true);    // its rules are readable now
-        if (document.fonts) document.fonts.addEventListener("loadingdone", () => schedule(50));
+        if (document.fonts) document.fonts.addEventListener("loadingdone", () => { st.fontsDirty = true; schedule(50); });
         window.addEventListener("load", () => { schedule(50); setTimeout(() => schedule(0), 500); }, { once: true });
     }
 
@@ -749,6 +845,7 @@
     function turnOff(reason) {
         cfg = null;
         offReason = reason;
+        clearJsFaces();
         clearTextareaMirrors();
         baseSink.set("");
         siteSink.set("");
@@ -756,6 +853,7 @@
     }
 
     function configure(settings, bf, hints) {
+        clearJsFaces();
         st = freshState();
         runWindowCount = 0;
 
@@ -777,8 +875,10 @@
             preFaces: new Set(hintNames.map(norm))
         };
 
-        baseSink.set(buildBaseCss());
-        attach();
+        trackOwnFaces(() => {
+            baseSink.set(buildBaseCss());
+            attach();
+        });
         listen();
 
         if (document.readyState !== "loading") schedule(0);

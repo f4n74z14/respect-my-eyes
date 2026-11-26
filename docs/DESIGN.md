@@ -39,7 +39,8 @@ Each family name is classified on its own (icon / sans / serif / mono) by keywor
 - Where it cannot be deleted (blocked sheet), the browser merges faces with identical descriptors and the later one wins. So the descriptors the page declared (`font-weight: 1 1000`, `font-stretch: 25% 151%`...) are read from `document.fonts` and copied into our rules. This is what makes variable fonts replaceable.
 - Selectors are mirrored (`!important` rule with the chosen font) only where a name cannot be replaced: stacks made of generic families such as `system-ui`, and monospace stacks (for the forced size). A named stack is replaced by name, which keeps the page's cascade intact; mirroring its selector would reorder the cascade and clobber descendants that set their own icon font (a page rule like `.mce-container *` is the classic case). Selectors ending in `*` are never mirrored. A stack that is purely `sans-serif`, `serif` or `monospace` is skipped, since it already follows the browser (unless a custom font is set).
 - `html, body` follow the category detected on the body.
-- All output lives in two constructed stylesheets (a base sheet applied at `document_start` and a site sheet rebuilt on change). They are exempt from page CSP and cheap to replace. A `<style>` fallback exists.
+- **JS-created `FontFace` shadowing.** Programmatic `new FontFace(...)` + `document.fonts.add(...)` entries outrank CSS `@font-face` rules in Chromium's font cascade. `content.js` probes each unseen `document.fonts` entry once via `delete()` + re-`add()` (CSS-backed entries return `false`, JS-added entries return `true`), strips stray outer quotes, and injects matching `new FontFace(family, local(...), descriptors)` shadows after them in `document.fonts` (skipping the user's chosen fonts and deferred editor fonts). When a newly settled unknown `FontFace` appears, `loadingdone` schedules a rescan and flags a DOM resample so dynamically rendered/virtualized specimens using inline fallback stacks (e.g. `style="font-family: Aleo, Georgia, serif"`) are discovered and shadowed too. All injected `FontFace` shadows are removed cleanly when disabled or excluded.
+- All output lives in two constructed stylesheets (a base sheet applied at `document_start` and a site sheet rebuilt on change) plus any tracked JS `FontFace` shadows. They are exempt from page CSP and cheap to replace. A `<style>` fallback exists.
 
 ## Code editors
 
@@ -88,7 +89,7 @@ Editors measure the width of a character and cache it, then place the cursor fro
 
 - Pseudo-element-only fonts and closed shadow roots are not inspected directly (their names are still replaced when used or declared elsewhere).
 - `system-ui` cannot be replaced by `@font-face`; it is handled with selector rules.
-- A font registered by script after the overrides are built may win until the next rescan.
+- If a script creates a JS `FontFace` synchronously and renders without triggering `loadingdone` or DOM stylesheet mutations, it waits for the next scheduled scan (`load` or idle/timeout).
 
 ## Tests
 
