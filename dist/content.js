@@ -388,10 +388,18 @@
             const key = `${lower}|${weight}|${style}|${stretch}`;
             const desc = { family, lower, weight, style, stretch };
 
-            if (isJsFontFace(f, fonts) && st.jsFaces.size < LIMITS.pageFaces && !st.jsFaces.has(key)) {
-                st.jsFaces.set(key, desc);
-                st.syncJs = true;
-                changed = true;
+            if (isJsFontFace(f, fonts)) {
+                const shadows = st.ourJs.get(key);
+                if (shadows) {
+                    for (const jf of shadows) {
+                        try { fonts.delete(jf); if (typeof fonts.add === "function") fonts.add(jf); } catch {}
+                    }
+                }
+                else if (st.jsFaces.size < LIMITS.pageFaces && !st.jsFaces.has(key)) {
+                    st.jsFaces.set(key, desc);
+                    st.syncJs = true;
+                    changed = true;
+                }
             }
             if (!st.faceKeys.has(key) && st.faceKeys.size < LIMITS.pageFaces * 2) {
                 st.faceKeys.add(key);
