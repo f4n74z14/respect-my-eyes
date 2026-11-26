@@ -8,8 +8,8 @@ What the extension does, how, and what each decision costs. Behaviour is covered
 | --- | --- |
 | `dist/manifest.json` | Manifest V3. Permissions: `storage`, `fontSettings`, `activeTab`. One content script on all URLs and frames, at `document_start`. |
 | `dist/background.js` | Service worker. Reads `chrome.fontSettings`, caches it, migrates old storage keys, learns editor fonts per site, tracks per-tab newly learned fonts (`rme:pageStart` / `rme:tabState`), shows a `"!"` badge when a reload is needed, and performs opt-in one-shot tab auto-reload (`editors.autoReload`). |
-| `dist/content.js` | Page script. Scans, classifies, and injects the override CSS. Sends `rme:pageStart` from the top frame and `rme:learn` from any frame that discovers an editor monospace font late. |
-| `dist/common.js` | Shared pure logic: classification, settings (`editors.autoReload` included), CSS builders, unified selector-list scanning (`scanSelectorList`). Touches `chrome.*` only in `RME.storage` (serialized write queue to preserve toggle order). |
+| `dist/content.js` | Page script. Organizes page vs. config state cleanly, scans CSSOM + open shadow DOM (`scanLists`) and `document.fonts` (including JS `FontFace` shadowing and `trackOwnFaces`), samples via `domElements` + `requestIdleCallback`, protects code editors, and syncs textarea mirrors. Sends `rme:pageStart` and `rme:learn`. |
+| `dist/common.js` | Shared pure logic: classification, settings (`editors.autoReload` included), CSS & `FontFace` descriptor builders (`jsFontFaceSpecs`), unified selector-list scanning (`scanSelectorList`). Touches `chrome.*` only in `RME.storage` (serialized write queue). |
 | `dist/ui.js` | DOM helpers shared by the popup and settings page, including `refreshBrowserFonts()`. Applies the user's sans and mono fonts to those pages via `--font-ui` / `--font-mono` plus `local()` `@font-face` aliases (`__rme_ui_sans`, `__rme_ui_mono`) so local/PostScript font names resolve too. Without a browser or custom font the system stack stays. |
 | `dist/popup.*`, `dist/options.*` | Popup and settings page following `UI.md`. Both keep fonts and controls in sync on `storage.onChanged`, guard against stale own-write echoes, flush pending debounced writes on `pagehide`, refresh missing browser fonts, and expose the `editors.autoReload` toggle; the popup keeps the reload banner interactive above `#app.off`, pins `header`/`footer` outside the scrollable `#app`, awaits `chrome.tabs.reload()` before closing, and merges `rme:tabState` from iframes. |
 | `dist/ui.css` | Shared styles (Nord palette, light and dark) and radius/layout tokens (`UI.md`), applying `--font-ui` and `--font-mono` across controls and monospace elements (`code`, `pre`, `kbd`, `samp`, `textarea`). Page-specific styles are in `popup.css` and `options.css`. |
@@ -64,9 +64,9 @@ Editors measure the width of a character and cache it, then place the cursor fro
 - **The font list is free until used.** A listed font is declared only when the page uses it (found by the sources above), so the cost per tab depends on the page, not on the list. The base sheet holds only the site's hints and a few fixed rules.
 - Sheets are scanned incrementally; a page with nothing new does no work.
 - Generated `@font-face` rules are cached per family and category; the CSS is rebuilt only when something new was found.
-- `document.fonts` is re-read only when its size changed.
-- Sampling uses `requestIdleCallback` with a 53-bit numeric element hash and stops immediately once the sample cap is reached, while DOM walks stream directly with zero array allocation.
-- Page scripts (`common.js` + `content.js`) are about 53 KB.
+- `document.fonts` is re-read only when its size changes or `loadingdone` fires, and extension-injected CSS/JS `FontFace` instances (`ourFaces`) are skipped without `fonts.delete()` probing.
+- Sampling uses `requestIdleCallback` with a shared `domElements` generator, a 53-bit numeric element hash, and immediate termination at the sample cap with zero full-tree array allocation.
+- Page scripts (`common.js` + `content.js`) are about 62 KB total (~25.6 KB + ~36.0 KB).
 
 ## Trade-offs
 
