@@ -78,7 +78,9 @@
         winCount: 0,
         fontCount: -1,
         bodyCat: null,
-        lastCss: null
+        lastCss: null,
+        lastReport: null,
+        lastReportAt: 0
     });
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -749,7 +751,11 @@
     function turnOff(reason) {
         cfg = null;
         offReason = reason;
-        if (st && st.timer) clearTimeout(st.timer);
+        if (st) {
+            if (st.timer) clearTimeout(st.timer);
+            st.lastReport = null;
+            st.lastReportAt = 0;
+        }
         clearJsFaces();
         clearTextareaMirrors();
         baseSink.set("");
@@ -832,10 +838,14 @@
         return [...unknown.values()].sort((a, b) => b.count - a.count).slice(0, 30);
     }
 
-    function buildReport() {
+    function buildReport(live = false) {
         const base = { host: location.hostname, active: !!cfg, reason: offReason, unknown: [], deferred: [], editors: [], protect: false, siteOff: false };
         if (!cfg) return base;
-        return {
+        const now = Date.now();
+        if (live && st && st.lastReport && now - st.lastReportAt < 900) return st.lastReport;
+
+        if (document.fonts && st && st.fontCount >= 0 && document.fonts.size !== st.fontCount) schedule(0);
+        const rep = {
             ...base,
             protect: !!cfg.protectSel,
             siteOff: cfg.settings.editors.protect && cfg.editorsOffSite,
@@ -843,13 +853,15 @@
             deferred: [...page.lateNames.values()],
             unknown: findUnknownFonts()
         };
+        if (st) { st.lastReport = rep; st.lastReportAt = now; }
+        return rep;
     }
 
     try {
         if (window === window.top) Promise.resolve(chrome.runtime.sendMessage({ type: "rme:pageStart" })).catch(() => {});
         F.storage.onChange(load);
         chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-            if (msg && msg.type === "rme:report" && window === window.top) reply(buildReport());
+            if (msg && msg.type === "rme:report" && window === window.top) reply(buildReport(!!msg.live));
         });
     }
     catch {}

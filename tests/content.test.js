@@ -468,6 +468,14 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.ok(shadows2.some(f => f.family === "Aleo" && f.source.includes('local("Georgia")')), "loadingdone triggers resample so unclassified late specimen JS FontFace is shadowed");
   assert.ok(jsEnv.w.__fonts.indexOf(shadows2.find(f => f.family === "Aleo")) > jsEnv.w.__fonts.indexOf(siteAleo), "shadow FontFace sits after the site's JS FontFace");
 
+  // SPA navigation/language switch re-adds a fresh FontFace instance for an already-shadowed family: shadow must move after it
+  const reAddedPlayfair = { family: '"Playfair Display"', weight: "400", style: "normal", stretch: "normal", status: "loaded", __js: true };
+  jsEnv.w.__fonts.push(reAddedPlayfair);
+  (jsEnv.w.__fontListeners.loadingdone || []).forEach(fn => fn({}));
+  await wait(250);
+  const pfShadow = jsEnv.w.__fonts.find(f => f.family === "Playfair Display" && f.source && String(f.source).startsWith('local("'));
+  assert.ok(pfShadow && jsEnv.w.__fonts.indexOf(pfShadow) > jsEnv.w.__fonts.indexOf(reAddedPlayfair), "shadow FontFace is re-promoted after SPA re-added FontFace");
+
   // Disabling the extension removes our JS FontFace shadows while preserving the site's own FontFace entries
   jsEnv.store.settings = { enabled: false };
   jsEnv.listeners.forEach(fn => fn({ rmeSettings: {} }, "local"));
@@ -475,6 +483,20 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   const remaining = jsEnv.w.__fonts;
   assert.ok(remaining.includes(sitePlayfair) && remaining.includes(siteAleo), "disabling preserves the site's original JS FontFace entries");
   assert.ok(!remaining.some(f => f.source && String(f.source).startsWith('local("')), "disabling removes all injected JS FontFace shadows");
+
+  // --- 14. Live report polling throttles repeated DOM scans while non-live reports compute fresh state ---
+  const repEnv = setup({ settings: undefined, bf: BF });
+  await wait(400);
+  let rLive1, rLive2, rFresh;
+  repEnv.w.__onMessage({ type: "rme:report", live: true }, {}, r => (rLive1 = r));
+  const probeEl = repEnv.w.document.createElement("div");
+  probeEl.setAttribute("style", "font-family: 'Live Probe Display'");
+  probeEl.textContent = "probe";
+  repEnv.w.document.body.appendChild(probeEl);
+  repEnv.w.__onMessage({ type: "rme:report", live: true }, {}, r => (rLive2 = r));
+  assert.strictEqual(rLive2, rLive1, "live poll within 900ms returns cached report without re-walking DOM");
+  repEnv.w.__onMessage({ type: "rme:report" }, {}, r => (rFresh = r));
+  assert.ok(rFresh !== rLive1 && rFresh.unknown.some(u => u.name === "Live Probe Display"), "non-live report recomputes and detects newly added unknown font");
 
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

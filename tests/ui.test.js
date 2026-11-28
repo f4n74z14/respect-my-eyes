@@ -8,11 +8,14 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 const BF = { available: true, standard: "Times New Roman", serif: "Georgia", sansserif: "Verdana", fixed: "Consolas", fixedSize: 13, defaultSize: 16 };
 
 let sharedStore = { rmeBrowserFonts: BF };
+const openWindows = [];
 async function page(file, { report, tabState, url = "https://site.test/", bf = BF } = {}) {
   const read = f => fs.readFileSync(path.join(dist, f), "utf8");
   const html = read(file);
   const w = new JSDOM(html.replace(/<script src="[^"]+"><\/script>/g, ""), { runScripts: "outside-only", url: "chrome-extension://x/" + file }).window;
+  openWindows.push(w);
   w.self = w;
+  Object.defineProperty(w.document, "hidden", { value: false, configurable: true });
   w.Element.prototype.scrollIntoView = function () {};   // missing in jsdom
   const created = [], events = [], storageListeners = [];
   w.close = () => { events.push("close"); };
@@ -38,7 +41,7 @@ async function page(file, { report, tabState, url = "https://site.test/", bf = B
     },
     runtime: {
       sendMessage: async m => {
-        if (m && m.type === "rme:tabState") return tabState || { learned: [], hosts: [] };
+        if (m && m.type === "rme:tabState") return (typeof tabState === "function" ? tabState(m) : tabState) || { learned: [], hosts: [] };
         return bf;
       },
       getURL: p => "chrome-extension://x/" + p,
@@ -46,7 +49,7 @@ async function page(file, { report, tabState, url = "https://site.test/", bf = B
     },
     tabs: {
       query: async () => [{ id: 1, url }],
-      sendMessage: async () => report,
+      sendMessage: async (_id, m) => typeof report === "function" ? report(m) : report,
       create: o => created.push(o.url),
       reload: async id => { await wait(20); events.push("reload:" + id); }
     }
@@ -58,7 +61,7 @@ async function page(file, { report, tabState, url = "https://site.test/", bf = B
 }
 const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
 
-(async () => {
+(async () => { try {
   // ---------------------------------------------------------------- options
   const o = await page("options.html");
   assert.strictEqual(o.d.querySelectorAll("#fontRows .font-row").length, 3);
@@ -352,5 +355,56 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   p.w.matchMedia = q => ({ matches: /prefers-reduced-motion:\s*reduce/.test(q) });
   assert.strictEqual(p.w.RME.ui.animDelay(160), 0, "animDelay skips exit timers when reduced motion is preferred");
 
+  // reactive live updates: recovers once content script attaches, surfaces new fonts/editors, and resists spam/shifting/disappearing
+  let curRep = undefined;
+  let curTabState = { learned: [], hosts: [] };
+  let reportCalls = 0;
+  const liveP = await page("popup.html", {
+    report: () => { reportCalls++; return curRep; },
+    tabState: () => curTabState
+  });
+  assert.strictEqual(liveP.$("note").hidden, false, "starts with not-running note before content script attaches");
+
+  curRep = {
+    host: "live.test", active: true, reason: "", protect: true, siteOff: false,
+    deferred: [], editors: [],
+    unknown: [{ name: "Alpha Display", count: 10 }, { name: "Beta Sans", count: 5 }]
+  };
+  curTabState = { learned: ["Late Live Mono"], hosts: ["live.test"] };
+  await wait(1350);
+  assert.strictEqual(liveP.$("note").hidden, true, "hides not-running note once live report arrives");
+  assert.strictEqual(liveP.$("host").textContent, "live.test", "displays site controls once attached");
+  assert.strictEqual(liveP.$("unknown").children.length, 2, "renders live unclassified fonts");
+  assert.ok(liveP.$("editors").textContent.includes("Late Live Mono"), "renders live tabState learned font");
+
+  // Select Serif on Alpha Display, then send hostile update (drops Beta Sans, injects higher-count Flood High + 40 spam fonts)
+  const alphaCard = liveP.$("unknown").children[0];
+  alphaCard.querySelector(".seg").children[1].click();
+  curRep = {
+    host: "live.test", active: true, reason: "", protect: true, siteOff: false,
+    deferred: [], editors: [],
+    unknown: [
+      { name: "Flood High", count: 9999 },
+      { name: "Alpha Display", count: 42 },
+      ...Array.from({ length: 40 }, (_, i) => ({ name: `Spam Font ${i}`, count: 500 - i }))
+    ]
+  };
+  await wait(1350);
+  assert.strictEqual(liveP.$("unknown").children[0], alphaCard, "existing card DOM node stays in place (no shifting)");
+  assert.ok(alphaCard.textContent.includes("42 elements"), "updates element count in place");
+  assert.strictEqual(alphaCard.querySelector(".seg").children[1].getAttribute("aria-checked"), "true", "preserves user category selection across live updates");
+  assert.ok(liveP.$("unknown").children[1].textContent.includes("Beta Sans"), "omitted font stays sticky and does not disappear");
+  assert.strictEqual(liveP.$("unknownCount").textContent, "30", "caps unknown font additions to prevent interface flooding");
+
+  // pagehide stops background polling
+  liveP.ev("pagehide", liveP.w);
+  const callsAtHide = reportCalls;
+  await wait(1350);
+  assert.strictEqual(reportCalls, callsAtHide, "polling stops after pagehide");
+
   console.log("ui.test.js: all checks passed");
-})().catch(e => { console.error(e); process.exit(1); });
+} finally {
+  for (const win of openWindows) {
+    try { win.dispatchEvent(new win.Event("pagehide")); win.close(); } catch {}
+  }
+} })().catch(e => { console.error(e); process.exit(1); });

@@ -6,10 +6,12 @@
 
     const SITE_CATS = [["sans", "Sans"], ["serif", "Serif"], ["mono", "Mono"], ["ignore", "Icon"]];
     const BROWSER_STORES = new Set(["chromewebstore.google.com", "microsoftedge.microsoft.com"]);
-    const UNKNOWN_PREVIEW = 4, UNKNOWN_FILTER_FROM = 6;
+    const UNKNOWN_PREVIEW = 4, UNKNOWN_FILTER_FROM = 6, MAX_UNKNOWN = 30, MAX_LIVE_ADDS = 30, LIVE_POLL_MS = 1200;
 
     let settings, bf, tab, host = "", report = null, baseBanner = "", lastTabLearned = [];
-    let unknownList = [], unknownExpanded = false;
+    let unknownList = [], unknownExpanded = false, unknownInitialized = false, liveAddedCount = 0;
+    let pollTimer = 0, liveBusy = false, stopped = false, lastSiteSig = "", lastEditorsSig = "";
+    const unknownCards = new Map();
 
     const save = () => F.storage.save(settings);
     const setSiteFlag = (list, active) => {
@@ -52,10 +54,14 @@
     // The switch only makes sense where the extension actually runs: not on browser pages or web stores, and not while
     // it is off. An excluded site keeps it, so it can be turned back on.
     function renderSite() {
-        $("site").hidden = !(report && host && (report.active || report.reason === "excluded"));
-        if ($("site").hidden) return;
+        const show = !!(report && host && (report.active || report.reason === "excluded"));
+        const on = show && !F.isExcluded(host, settings.excludedSites);
+        const sig = `${show}|${host}|${on}`;
+        if (sig === lastSiteSig) return;
+        lastSiteSig = sig;
 
-        const on = !F.isExcluded(host, settings.excludedSites);
+        $("site").hidden = !show;
+        if (!show) return;
 
         $("host").textContent = host;
         $("host").title = host;
@@ -70,17 +76,28 @@
         });
     }
 
-    function makeUnknownCard({ name, count }) {
+    const formatCount = n => n === 1 ? "1 element" : `${n} elements`;
+    const manualSet = () => new Set((settings.manualFonts || []).map(f => F.norm(f.name)));
+
+    function getUnknownCard(item) {
+        const cached = unknownCards.get(item.key);
+        if (cached) {
+            const label = formatCount(item.count);
+            if (cached.countEl.textContent !== label) cached.countEl.textContent = label;
+            return cached.card;
+        }
+
+        const { name, key } = item;
         let category = "sans";
 
         const seg = el("div", "seg", null, { role: "radiogroup", "aria-label": `Category of ${name}` });
         segmented(seg, SITE_CATS, category, v => { category = v; });
 
         const card = el("div", "card2");
+        const countEl = el("span", "hint", formatCount(item.count));
         const add = el("button", "primary sm", "Add", {
             type: "button",
             async onclick() {
-                const key = F.norm(name);
                 const idx = settings.manualFonts.findIndex(f => F.norm(f.name) === key);
                 if (idx === -1 && settings.manualFonts.length >= 500) {
                     toast("Font list limit (500) reached");
@@ -92,7 +109,8 @@
                 settings.manualFonts = F.cleanManual(next);
                 await save();
 
-                unknownList = unknownList.filter(f => F.norm(f.name) !== key);
+                unknownList = unknownList.filter(f => f.key !== key);
+                unknownCards.delete(key);
                 const finishRemove = () => drawUnknown();
                 const delay = animDelay(160);
                 if (!delay) finishRemove();
@@ -104,10 +122,12 @@
         });
 
         const top = el("div", "top");
-        top.append(el("span", "name", name, { title: name }), el("span", "hint", count === 1 ? "1 element" : `${count} elements`));
+        top.append(el("span", "name", name, { title: name }), countEl);
         const bottom = el("div", "bottom");
         bottom.append(seg, add);
         card.append(top, bottom);
+
+        unknownCards.set(key, { card, countEl });
         return card;
     }
 
@@ -126,7 +146,10 @@
         const visible = query || unknownExpanded ? matches : matches.slice(0, UNKNOWN_PREVIEW);
         const hiddenCount = matches.length - visible.length;
 
-        $("unknown").replaceChildren(...(visible.length ? visible.map(makeUnknownCard) : [el("div", "empty", "No matching fonts.")]));
+        const nextNodes = visible.length ? visible.map(getUnknownCard) : [el("div", "empty", "No matching fonts.")];
+        const cur = $("unknown").children;
+        const sameOrder = cur.length === nextNodes.length && nextNodes.every((n, i) => cur[i] === n);
+        if (!sameOrder) $("unknown").replaceChildren(...nextNodes);
 
         const more = $("unknownMore");
         const canToggle = !query && (hiddenCount > 0 || (unknownExpanded && matches.length > UNKNOWN_PREVIEW));
@@ -134,12 +157,55 @@
         if (canToggle) more.textContent = unknownExpanded ? "Show fewer" : `Show ${hiddenCount} more`;
     }
 
-    // Fonts nobody could classify: prioritized preview with search & expand when a site has many
-    function renderUnknown() {
-        unknownList = report && report.active ? report.unknown.map(x => ({ ...x })) : [];
+    // Merge incoming unclassified fonts without shifting or dropping existing items (append-only, session-capped)
+    function mergeUnknown(incoming) {
+        if (!Array.isArray(incoming)) return false;
+        const manual = manualSet();
+        const byKey = new Map(unknownList.map(x => [x.key, x]));
+        let changed = false;
+
+        for (const raw of incoming) {
+            if (!raw || typeof raw.name !== "string") continue;
+            const name = raw.name.trim().slice(0, 200);
+            const key = name ? F.norm(name) : "";
+            if (!key || manual.has(key)) continue;
+
+            const count = Number.isFinite(raw.count) && raw.count > 0 ? Math.min(Math.floor(raw.count), 1e7) : 1;
+            const existing = byKey.get(key);
+            if (existing) {
+                if (count > existing.count) { existing.count = count; changed = true; }
+                continue;
+            }
+            if (unknownList.length >= MAX_UNKNOWN) continue;
+            if (unknownInitialized && liveAddedCount >= MAX_LIVE_ADDS) continue;
+
+            const entry = { key, name, count };
+            unknownList.push(entry);
+            byKey.set(key, entry);
+            if (unknownInitialized) liveAddedCount++;
+            changed = true;
+        }
+        unknownInitialized = true;
+        return changed;
+    }
+
+    function resetUnknown() {
+        unknownList = [];
+        unknownCards.clear();
         unknownExpanded = false;
+        unknownInitialized = false;
+        liveAddedCount = 0;
         $("unknownFilter").value = "";
         drawUnknown();
+    }
+
+    // Fonts nobody could classify: prioritized preview with search & expand when a site has many
+    function renderUnknown() {
+        resetUnknown();
+        if (report && report.active) {
+            mergeUnknown(report.unknown);
+            drawUnknown();
+        }
     }
 
     const row = (text, trailing) => {
@@ -152,15 +218,24 @@
     // already using stay untouched until the next load (they are remembered automatically).
     function renderEditors(tabLearned = []) {
         const active = !!(report && report.active);
-        const editors = active ? report.editors : [];
-        const late = F.cleanNameList([...(active ? report.deferred : []), ...tabLearned]);
-
-        $("editorsBox").hidden = !(editors.length || late.length || (active && report.siteOff));
-        if ($("editorsBox").hidden) return;
-
+        const editors = active && Array.isArray(report.editors) ? report.editors.slice(0, 6) : [];
+        const late = F.cleanNameList([...(active && Array.isArray(report.deferred) ? report.deferred : []), ...tabLearned]).slice(0, 24);
         const protectOn = settings.editors.protect;
+        const autoReload = settings.editors.autoReload;
+        const siteOff = !!(active && report.siteOff);
+        const show = !!(editors.length || late.length || siteOff);
 
-        bindSwitch("edSwitch", !report.siteOff && protectOn, async protect => {
+        const sig = show
+            ? `${protectOn}|${autoReload}|${siteOff}|${editors.map(e => `${e.sample}:${e.count}`).join(",")}|${late.join(",")}`
+            : "hidden";
+        if (sig === lastEditorsSig) return;
+        const hadLate = lastEditorsSig && lastEditorsSig !== "hidden" && !lastEditorsSig.endsWith("|");
+        lastEditorsSig = sig;
+
+        $("editorsBox").hidden = !show;
+        if (!show) return;
+
+        bindSwitch("edSwitch", !siteOff && protectOn, async protect => {
             settings.editors.offSites = setSiteFlag(settings.editors.offSites, protect);
             await save();
             needsReload(protect ? "Reload to protect editors." : "Reload to apply change.", true);
@@ -169,7 +244,7 @@
 
         if ($("edAutoRow")) {
             $("edAutoRow").hidden = !protectOn;
-            bindSwitch("edAutoReload", settings.editors.autoReload, async auto => {
+            bindSwitch("edAutoReload", autoReload, async auto => {
                 settings.editors.autoReload = auto;
                 await save();
                 toast(auto ? "Auto-reload on for new editors" : "Auto-reload off");
@@ -188,7 +263,7 @@
             ...late.map(name => row(text(el("div", "name", name, { title: name })), [el("span", "badge browser", "Remembered")]))
         );
 
-        if (late.length) needsReload("Reload once to use your font in editors.", true);
+        if (late.length && !hadLate) needsReload("Reload once to use your font in editors.", true);
     }
 
     // Where the extension cannot run, and what to tell the user
@@ -206,6 +281,83 @@
 
         return web ? url.hostname : "";
     }
+
+    async function fetchTabInfo(live = false) {
+        if (!tab) return { rep: null, state: null };
+        const [rep, state] = await Promise.all([
+            chrome.tabs.sendMessage(tab.id, live ? { type: "rme:report", live: true } : { type: "rme:report" }, { frameId: 0 }).catch(() => null),
+            F.ui.send({ type: "rme:tabState", tabId: tab.id }).catch(() => null)
+        ]);
+        return { rep, state };
+    }
+
+    async function refreshLive() {
+        if (stopped || !tab || liveBusy || (typeof document.hidden === "boolean" && document.hidden)) return;
+        liveBusy = true;
+        try {
+            const { rep, state } = await fetchTabInfo(true);
+            if (stopped) return;
+            if (state && Array.isArray(state.learned)) lastTabLearned = state.learned;
+
+            if (rep) {
+                const hadNoReport = !report;
+                const hostChanged = !!(host && rep.host && rep.host !== host);
+                report = rep;
+
+                if (hadNoReport || hostChanged) {
+                    $("note").hidden = true;
+                    if (hadNoReport && baseBanner === "Reload this page to start.") {
+                        baseBanner = "";
+                        restoreBanner();
+                    }
+                    host = rep.host || host;
+                    lastSiteSig = "";
+                    lastEditorsSig = "";
+                    renderSite();
+                    renderUnknown();
+                    renderEditors(lastTabLearned);
+                }
+                else if (rep.active) {
+                    renderSite();
+                    if (mergeUnknown(rep.unknown)) drawUnknown();
+                    renderEditors(lastTabLearned);
+                }
+                else if (settings.enabled) {
+                    renderSite();
+                    if (unknownList.length) resetUnknown();
+                    renderEditors(lastTabLearned);
+                }
+            }
+            else if (lastTabLearned.length) {
+                renderEditors(lastTabLearned);
+            }
+        }
+        finally {
+            liveBusy = false;
+        }
+    }
+
+    function schedulePoll() {
+        clearTimeout(pollTimer);
+        if (stopped || !tab || (typeof document.hidden === "boolean" && document.hidden)) return;
+        pollTimer = setTimeout(async () => {
+            await refreshLive();
+            schedulePoll();
+        }, LIVE_POLL_MS);
+    }
+
+    function stopPolling() {
+        stopped = true;
+        clearTimeout(pollTimer);
+        pollTimer = 0;
+    }
+
+    window.addEventListener("pagehide", stopPolling);
+    window.addEventListener("unload", stopPolling);
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) clearTimeout(pollTimer);
+        else if (!stopped && tab) { refreshLive().then(schedulePoll); }
+    });
 
     async function main() {
         ({ settings, bf } = await F.storage.load());
@@ -229,6 +381,7 @@
             if (target) {
                 try { await chrome.tabs.reload(target.id); } catch {}
             }
+            stopPolling();
             window.close();
         };
 
@@ -246,10 +399,7 @@
         [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
         try {
-            const [rep, state] = await Promise.all([
-                tab ? chrome.tabs.sendMessage(tab.id, { type: "rme:report" }, { frameId: 0 }).catch(() => null) : null,
-                tab ? F.ui.send({ type: "rme:tabState", tabId: tab.id }).catch(() => null) : null
-            ]);
+            const { rep, state } = await fetchTabInfo(false);
             report = rep;
             if (state && Array.isArray(state.learned)) lastTabLearned = state.learned;
         }
@@ -265,6 +415,7 @@
         renderSite();
         renderUnknown();
         renderEditors(lastTabLearned);
+        schedulePoll();
     }
 
     F.storage.onChange(changes => {
@@ -275,7 +426,19 @@
             renderFonts();
             $("enabled").checked = settings.enabled;
             $("app").classList.toggle("off", !settings.enabled);
+
+            const manual = manualSet();
+            const before = unknownList.length;
+            unknownList = unknownList.filter(f => {
+                if (!manual.has(f.key)) return true;
+                unknownCards.delete(f.key);
+                return false;
+            });
+            if (unknownList.length !== before) drawUnknown();
+
             if (report !== null || host) {
+                lastSiteSig = "";
+                lastEditorsSig = "";
                 renderSite();
                 renderEditors(lastTabLearned);
             }
