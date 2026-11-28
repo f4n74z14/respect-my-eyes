@@ -1,12 +1,12 @@
 /* Respect My Eyes - popup (shared components are in ui.css) */
-body { display: flex; flex-direction: column; width: 360px; max-height: 590px; overflow: hidden; padding: 0; }
+body { display: flex; flex-direction: column; width: 360px; min-height: 180px; max-height: 590px; overflow: hidden; padding: 0; }
 header { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; }
 .brand { --logo: 20px; }
 h2 { margin: 0 0 6px; }
 header, .banner, footer { position: relative; z-index: 2; pointer-events: auto; }
 .banner { flex: none; margin: 0 14px 10px; }
 
-#app { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 14px 14px; display: flex; flex-direction: column; gap: 14px; scrollbar-width: thin; transition: opacity var(--fast) var(--ease); }
+#app { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 0 14px 14px; display: flex; flex-direction: column; gap: 14px; scrollbar-width: thin; transition: opacity var(--fast) var(--ease); }
 #app.off { opacity: .45; pointer-events: none; }
 
 #app .card { padding: 0 12px; }
@@ -16,8 +16,6 @@ header, .banner, footer { position: relative; z-index: 2; pointer-events: auto; 
 #note { padding: 10px 12px; color: var(--muted); font-size: 13px; }
 
 #fonts, #unknown, #editors { display: flex; flex-direction: column; gap: 6px; }
-#unknown { max-height: 220px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
-#editors { max-height: 165px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 
 .font-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 7px 12px; }
 .font-item .kind { width: 62px; flex: none; font-size: 12px; color: var(--muted); }

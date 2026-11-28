@@ -169,7 +169,7 @@ details > summary:hover { opacity: .8; }
 @starting-style { .banner:not([hidden]) { opacity: 0; transform: translateY(-6px); } }
 
 /* ---- lists ---- */
-.list { border: 1px solid var(--line); border-radius: var(--radius); background: var(--field); max-height: 320px; overflow: auto; contain: layout style; scrollbar-width: thin; }
+.list { border: 1px solid var(--line); border-radius: var(--radius); background: var(--field); max-height: 320px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; contain: layout style; scrollbar-width: thin; }
 .list-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px 5px 12px; border-top: 1px solid var(--line); transition: background-color var(--fast); content-visibility: auto; contain-intrinsic-size: auto 34px; }
 .list-row:first-child { border-top: 0; }
 .list-row:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
@@ -209,7 +209,7 @@ dialog[open]::backdrop { background: rgb(46 52 64 / .55); }
 dialog form { display: flex; flex-direction: column; max-height: 86vh; }
 .dlg-head { padding: 16px 20px 4px; }
 .dlg-head h3 { margin: 0 0 2px; font-size: 16px; }
-.dlg-body { padding: 8px 20px; overflow: auto; }
+.dlg-body { padding: 8px 20px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; }
 .dlg-foot { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 20px 16px; border-top: 1px solid var(--line); }
 .dlg-foot .grow { flex: 1; font-size: 12px; color: var(--muted); }
 

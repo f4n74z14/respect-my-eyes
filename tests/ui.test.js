@@ -168,7 +168,10 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
 
   o.$("edProtect").checked = false; o.ev("change", o.$("edProtect")); await wait(50);
   assert.strictEqual(o.store.rmeSettings.editors.protect, false);
-  o.$("edSelectors").value = ".my-editor\n:::bad"; o.ev("input", o.$("edSelectors"));
+  o.$("edOffSites").value = "sub.example.com\nexample.com"; o.$("edOffSites").oninput();
+  o.ev("pagehide", o.w); await wait(50);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(o.store.rmeSettings.editors.offSites)), ["sub.example.com", "example.com"]);
+  o.$("edSelectors").value = ".my-editor\n:::bad"; o.$("edSelectors").oninput();
   o.ev("pagehide", o.w); await wait(50);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(o.store.rmeSettings.editors.selectors)), [".my-editor", ":::bad"], "pagehide flushes pending debounced edits");
   o.$("resetAll").click(); await wait(50);
@@ -286,8 +289,12 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   p = await page("popup.html", { report: { host: "x.test", active: true, protect: true, siteOff: false, deferred: [], unknown: [], editors: [] } });
   assert.ok(p.$("attention").hidden && p.$("editorsBox").hidden, "empty sections stay hidden");
 
-  // heavy site near limits: long font names truncate cleanly, scroll bounds exist in CSS, and 500-font cap does not lie
-  assert.ok(/#unknown\s*\{[^}]*max-height:/.test(cssPopup) && /#editors\s*\{[^}]*max-height:/.test(cssPopup), "popup caps heavy lists with internal scrolling");
+  // heavy site near limits: long font names truncate cleanly, no nested popup/dialog scrollbars, and 500-font cap does not lie
+  const cssOptions = fs.readFileSync(path.join(dist, "options.css"), "utf8");
+  assert.ok(/body\s*\{[^}]*overflow:\s*hidden/.test(cssPopup), "popup body prevents outer overflow");
+  assert.ok(!/#unknown\s*\{[^}]*(max-height|overflow-y:\s*auto)/.test(cssPopup) && !/#editors\s*\{[^}]*(max-height|overflow-y:\s*auto)/.test(cssPopup), "popup avoids nested scrollbars inside #app");
+  assert.ok(/#impPreview\s*\{[^}]*max-height:\s*none/.test(cssOptions) && /#impPreview\s*\{[^}]*overflow:\s*visible/.test(cssOptions), "import preview expands inside .dlg-body without nested scrollbars");
+  assert.ok(/\.list\s*\{[^}]*overflow-y:\s*auto;\s*overflow-x:\s*hidden/.test(cssUi), ".list scrolls vertically without horizontal scrollbars");
   const longName = "VeryLongObfuscatedEditorFontNameWithoutSpaces_" + "x".repeat(60);
   sharedStore.rmeSettings = { version: 4, manualFonts: Array.from({ length: 500 }, (_, i) => ({ name: `Cap Font ${i}`, category: "sans" })) };
   p = await page("popup.html", {

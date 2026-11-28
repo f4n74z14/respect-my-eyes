@@ -170,9 +170,13 @@
                 : "";
         };
 
+        const showEdOffCount = () => { $("edOffCount").textContent = settings.editors.offSites.length ? `(${settings.editors.offSites.length} listed)` : ""; };
+
         bindSwitch("edProtect", settings.editors.protect, v => { settings.editors.protect = v; saveNow(); });
         bindSwitch("edAutoReload", settings.editors.autoReload, v => { settings.editors.autoReload = v; saveNow(); });
+        bindLines("edOffSites", settings.editors.offSites, lines => { settings.editors.offSites = F.cleanHostList(lines); showEdOffCount(); save(); });
         bindLines("edSelectors", settings.editors.selectors, lines => { settings.editors.selectors = F.cleanSelectors(lines); warn(); save(); });
+        showEdOffCount();
         warn();
     }
 

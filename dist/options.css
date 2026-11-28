@@ -44,4 +44,4 @@ details.adv.spaced { margin-top: 14px; }
 details.adv > .hint { margin-top: 8px; }
 details.adv > textarea { margin-top: 8px; }
 .dlg-cat { margin: 12px 0 8px; }
-#impPreview { max-height: 190px; }
+#impPreview { max-height: none; overflow: visible; }

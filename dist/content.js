@@ -153,8 +153,10 @@
     let editorPresentCache = null;
     function hasEditor() {
         if (page.lateNames.size > 0) return true;
-        if (!cfg.protectSel) return false;
-        if (editorPresentCache === null) editorPresentCache = !!document.querySelector(cfg.protectSel);
+        if (!cfg || !cfg.settings.editors.protect) return false;
+        const trueEditorSel = [...F.EDITOR_ROOTS, ...cfg.settings.editors.selectors.filter(F.validSelector)].join(",");
+        if (!trueEditorSel) return false;
+        if (editorPresentCache === null) editorPresentCache = !!document.querySelector(trueEditorSel);
         return editorPresentCache;
     }
 

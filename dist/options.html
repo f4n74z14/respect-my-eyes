@@ -88,6 +88,11 @@
                 <label class="switch"><input type="checkbox" id="edAutoReload" aria-label="Auto-reload for new editors"><span></span></label>
             </div>
             <div class="setting stack">
+                <div class="title">Excluded editor sites</div>
+                <div class="hint">Sites where code editor protection is paused. One per line (e.g. example.com). <span id="edOffCount"></span></div>
+                <textarea id="edOffSites" rows="3" spellcheck="false" aria-label="Excluded editor sites"></textarea>
+            </div>
+            <div class="setting stack">
                 <div class="title">Other elements</div>
                 <div class="hint">Excluded from font rules. One CSS selector per line (e.g. <code>.mce-container</code>).</div>
                 <textarea id="edSelectors" rows="3" spellcheck="false" placeholder=".mce-container&#10;#my-editor" aria-label="Protected elements"></textarea>
