@@ -62,11 +62,11 @@ Editors measure the width of a character and cache it, then place the cursor fro
 
 - No bundled CSS parser. The CSSOM is read directly.
 - **The font list is free until used.** A listed font is declared only when the page uses it (found by the sources above), so the cost per tab depends on the page, not on the list. The base sheet holds only the site's hints and a few fixed rules.
-- Sheets are scanned incrementally; a page with nothing new does no work.
-- Generated `@font-face` rules are cached per family and category; the CSS is rebuilt only when something new was found.
+- Sheets are scanned incrementally using direct `rule.style` access and char-code fast guards on `:root`/custom-property checks; `<link>` load and DOM observers ignore preloads/icons/alternates and coalesce stylesheet loads (`16 ms`).
+- Generated `@font-face` rules are cached per family and category; `rebuild()` invokes `trackOwnFaces()` only when CSS actually changes and declares `@font-face` rules, and `deleteFontFaces()` keeps `fontCount` synced.
 - `document.fonts` is re-read only when its size changes or `loadingdone` fires, and extension-injected CSS/JS `FontFace` instances (`ourFaces`) are skipped without `fonts.delete()` probing.
-- Sampling uses `requestIdleCallback` with a shared `domElements` generator, a 53-bit numeric element hash, and immediate termination at the sample cap with zero full-tree array allocation.
-- Page scripts (`common.js` + `content.js`) are about 62 KB total (~25.6 KB + ~36.0 KB).
+- Sampling always yields via `requestIdleCallback`, targets CSS-variable selectors (`varSels`, covering `font-family` and `font` shorthand) + zero-recalc inline `el.style.fontFamily` when stylesheets are readable (falling back to full DOM walks only on unreadable sheets or overflow), skips non-text SVG/void tags, and defers `inEditor()` `:has()` checks unless an unregistered mono family appears. Popup unknown-font counting likewise inspects only text-bearing/control elements and deduplicates repeated shapes via `elemHash()`.
+- Page scripts (`common.js` + `content.js`) stay compact (~64 KB total).
 
 ## Trade-offs
 

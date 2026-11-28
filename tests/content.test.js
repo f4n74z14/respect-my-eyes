@@ -498,5 +498,65 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   repEnv.w.__onMessage({ type: "rme:report" }, {}, r => (rFresh = r));
   assert.ok(rFresh !== rLive1 && rFresh.unknown.some(u => u.name === "Live Probe Display"), "non-live report recomputes and detects newly added unknown font");
 
+  // Non-stylesheet <link rel="preload"> load events do not schedule CSSOM rescans
+  const lazySt = repEnv.w.document.createElement("style");
+  lazySt.textContent = ".preload-skip { font-family: Tahoma, sans-serif; }";
+  repEnv.w.document.head.appendChild(lazySt);
+  const preload = repEnv.w.document.createElement("link");
+  preload.rel = "preload";
+  preload.as = "script";
+  repEnv.w.document.head.appendChild(preload);
+  preload.dispatchEvent(new repEnv.w.Event("load", { bubbles: false }));
+  await wait(80);
+  assert.ok(!repEnv.sheets()[1].includes("Tahoma"), "preload link load does not trigger immediate rescan before MutationObserver");
+  await wait(120);
+  assert.ok(repEnv.sheets()[1].includes("Tahoma"), "MutationObserver for <style> still picks up the stylesheet afterwards");
+
+  // --- 15. Shorthand `font: ... var(...)` triggers targeted varSels sampling & unknown counts stay accurate ---
+  const varEnv = setup({ settings: undefined, bf: BF });
+  await wait(400);
+  const shRule = {
+    selectorText: ".sh-var",
+    style: { fontFamily: "", font: "16px var(--sh-f)", length: 0, getPropertyValue: () => "" }
+  };
+  Object.setPrototypeOf(shRule, varEnv.w.CSSStyleRule.prototype);
+  const shSheet = { cssRules: [shRule] };
+  Object.defineProperty(varEnv.w.document, "adoptedStyleSheets", {
+    get: () => [shSheet, ...varEnv.adopted()],
+    set: () => {},
+    configurable: true
+  });
+  const shEl = varEnv.w.document.createElement("p");
+  shEl.className = "sh-var";
+  shEl.textContent = "shorthand var";
+  varEnv.w.document.body.appendChild(shEl);
+  // Mock computed style for .sh-var so getComputedStyle sees the resolved custom stack
+  const origGCS = varEnv.w.getComputedStyle.bind(varEnv.w);
+  varEnv.w.getComputedStyle = el => el === shEl ? { fontFamily: '"ShorthandVarFace", sans-serif' } : origGCS(el);
+  const shTrig = varEnv.w.document.createElement("style");
+  shTrig.textContent = ".sh-trig { font-family: Arial; }";
+  varEnv.w.document.head.appendChild(shTrig);
+  await wait(400);
+  assert.ok(varEnv.sheets()[1].includes('font-family:"ShorthandVarFace"'), "font shorthand with var() queues selector in varSels for sampling");
+
+  // Repeated unknown elements count accurately while deduplicating getComputedStyle calls
+  for (let i = 0; i < 3; i++) {
+    const dup = varEnv.w.document.createElement("span");
+    dup.className = "unk-dup";
+    dup.textContent = `u${i}`;
+    varEnv.w.document.body.appendChild(dup);
+  }
+  const realGCS2 = origGCS;
+  let dupCalls = 0;
+  varEnv.w.getComputedStyle = el => {
+    if (el && el.className === "unk-dup") { dupCalls++; return { fontFamily: '"Dup Unknown"' }; }
+    return el === shEl ? { fontFamily: '"ShorthandVarFace", sans-serif' } : realGCS2(el);
+  };
+  let dupRep;
+  varEnv.w.__onMessage({ type: "rme:report" }, {}, r => (dupRep = r));
+  const dupEntry = dupRep.unknown.find(u => u.name === "Dup Unknown");
+  assert.strictEqual(dupEntry && dupEntry.count, 3, "deduplicated unknown counting preserves total element count");
+  assert.strictEqual(dupCalls, 1, "identical sibling elements invoke getComputedStyle only once in findUnknownFonts");
+
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

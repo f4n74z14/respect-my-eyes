@@ -199,7 +199,14 @@
     }
 
     function looksLikeFontStack(value, prop) {
-        if (!value || /[{};@\\()\r\n]/.test(value) || !/[a-z\p{L}]/iu.test(value)) return false;
+        if (!value || /[{};@\\()\r\n]/.test(value)) return false;
+        const c0 = value.charCodeAt(0), c1 = value.charCodeAt(1);
+        if (c0 === 35 || c0 === 46 || (c0 >= 48 && c0 <= 57) || (c0 === 45 && c1 >= 48 && c1 <= 57)) return false;
+        if (!value.includes(",")) {
+            if (GENERIC_CAT[norm(value)]) return true;
+            return /font|family|typeface/i.test(prop) && !/size|weight|style|height|spacing/i.test(prop) && /[a-z\p{L}]/iu.test(value);
+        }
+        if (!/[a-z\p{L}]/iu.test(value)) return false;
         const parts = splitFamilies(value);
         const last = parts[parts.length - 1];
         if (last && last.generic && GENERIC_CAT[last.lower]) return true;
@@ -413,8 +420,11 @@
     }
 
     function isStandardFace(d) {
-        const b = weightBounds(d.weight);
-        return !!b && b[0] === b[1] && WEIGHTS.includes(b[0]) && /^(normal|italic)$/.test(d.style) && /^(normal|100%)$/.test(d.stretch || "normal");
+        const w = d.weight, s = d.style, st = d.stretch || "normal";
+        if ((w === "400" || w === "700" || w === "normal" || w === "bold") &&
+            (s === "normal" || s === "italic") && (st === "normal" || st === "100%")) return true;
+        const b = weightBounds(w);
+        return !!b && b[0] === b[1] && WEIGHTS.includes(b[0]) && /^(normal|italic)$/.test(s) && /^(normal|100%)$/.test(st);
     }
 
     function fontFaceCss(family, cat, fontName, scalePct) {

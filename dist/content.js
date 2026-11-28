@@ -20,7 +20,14 @@
     const VAR_SCOPE = /^(?::root|:host|html|body)\b|^:(?:where|is)\(\s*(?::root|:host|html|body)\b/i;
     const SAFE_VAR_PROP = /^--[a-zA-Z0-9_-]{1,120}$/;
     const PRE_WS = /^(pre|break-spaces)/;
-    const RULE_TYPES = { CSSStyleRule: 1, CSSImportRule: 3, CSSFontFaceRule: 5, CSSKeyframesRule: 7 };
+    const SKIP_TAGS = new Set([
+        "svg", "path", "circle", "rect", "polygon", "line", "polyline", "ellipse", "g", "use", "defs",
+        "clippath", "lineargradient", "radialgradient", "stop", "mask", "pattern", "symbol", "marker",
+        "img", "picture", "source", "track", "video", "audio", "canvas", "br", "hr", "wbr",
+        "script", "style", "link", "meta", "noscript", "template", "head", "title", "base"
+    ]);
+    const isStyleLink = n => n && n.nodeName === "LINK" && (!!n.sheet || /\bstylesheet\b/i.test(n.rel || ""));
+    const { CSSStyleRule: CStyle, CSSFontFaceRule: CFace, CSSImportRule: CImport, CSSKeyframesRule: CKey } = self;
 
     const LIMITS = {
         chunk: 250, sampleDom: 6000, reportDom: 8000, analysis: 2000, faces: 1000, pageFaces: 1000,
@@ -65,7 +72,10 @@
         faceRules: [],                  // page @font-face rules queued for deletion
         sel: { sans: new Set(), serif: new Set(), mono: new Set() },
         vars: [],
+        varSels: new Set(),
+        varSelsOverflow: false,
         sampled: new Set(),
+        hasUnreadable: false,
         sampledOnce: false,
         needsResample: false,
         fontsDirty: false,
@@ -155,10 +165,8 @@
     let editorPresentCache = null;
     function hasEditor() {
         if (page.lateNames.size > 0) return true;
-        if (!cfg || !cfg.settings.editors.protect) return false;
-        const trueEditorSel = [...F.EDITOR_ROOTS, ...cfg.settings.editors.selectors.filter(F.validSelector)].join(",");
-        if (!trueEditorSel) return false;
-        if (editorPresentCache === null) editorPresentCache = !!document.querySelector(trueEditorSel);
+        if (!cfg || !cfg.settings.editors.protect || !cfg.editorRootSel) return false;
+        if (editorPresentCache === null) editorPresentCache = !!document.querySelector(cfg.editorRootSel);
         return editorPresentCache;
     }
 
@@ -203,19 +211,17 @@
     // CSSOM & open shadow DOM scanning
     // -----------------------------------------------------------------------------------------------------------------
 
-    const isRule = (rule, ctor) => self[ctor] ? rule instanceof self[ctor] : rule.type === RULE_TYPES[ctor];
+    const isRule = (rule, ctor, id) => ctor ? rule instanceof ctor : rule.type === id;
 
-    function overrideCustomProps(rule) {
-        const sel = rule.selectorText;
-        if (!safeSelector(sel) || st.vars.length >= LIMITS.vars) return;
+    function overrideCustomProps(style, sel) {
+        if (!style.length || !safeSelector(sel) || st.vars.length >= LIMITS.vars) return;
 
-        const { style } = rule;
         const limit = Math.min(style.length, LIMITS.propsPerRule);
         let decls = "";
 
         for (let i = 0; i < limit; i++) {
             const prop = style[i];
-            if (!SAFE_VAR_PROP.test(prop)) continue;
+            if (prop.charCodeAt(0) !== 45 || prop.charCodeAt(1) !== 45 || !SAFE_VAR_PROP.test(prop)) continue;
             const value = style.getPropertyValue(prop).trim();
             if (!value || value.length > 500 || value.includes("(") || !F.looksLikeFontStack(value, prop)) continue;
 
@@ -233,19 +239,34 @@
         if (sel && sel.includes("&") && parentSel && sel.length + parentSel.length < LIMITS.selectorLen) {
             sel = sel.replaceAll("&", `:is(${parentSel})`);
         }
-        const a = rule.style.fontFamily && analyze(rule.style.fontFamily);
-        if (a) {
-            const defer = hasUnregisteredMono(a) && hasEditor() && (st.initialDone || ruleTouchesEditor(sel));
-            registerNames(a, defer);
+        const style = rule.style;
+        const ff = style.fontFamily;
+        if (ff) {
+            if (ff.includes("var(") && safeSelector(sel)) {
+                if (st.varSels.size < 200) st.varSels.add(sel);
+                else st.varSelsOverflow = true;
+            }
+            const a = analyze(ff);
+            if (a) {
+                const defer = hasUnregisteredMono(a) && hasEditor() && (st.initialDone || ruleTouchesEditor(sel));
+                registerNames(a, defer);
 
-            const mirror = overridable(a) && safeSelector(sel) && sel[0] !== "*" && !sel.includes("&") &&
-                (a.cat === "mono" || !a.names.length || a.firstGeneric) && st.sel[a.cat].size < LIMITS.selPerCat;
-            if (mirror) {
-                const safe = F.dropSweeps(sel);
-                if (safe) st.sel[a.cat].add(safe);
+                const mirror = overridable(a) && safeSelector(sel) && sel[0] !== "*" && !sel.includes("&") &&
+                    (a.cat === "mono" || !a.names.length || a.firstGeneric) && st.sel[a.cat].size < LIMITS.selPerCat;
+                if (mirror) {
+                    const safe = F.dropSweeps(sel);
+                    if (safe) st.sel[a.cat].add(safe);
+                }
             }
         }
-        if (sel && VAR_SCOPE.test(sel)) overrideCustomProps(rule);
+        else if (style.font && style.font.includes("var(") && safeSelector(sel)) {
+            if (st.varSels.size < 200) st.varSels.add(sel);
+            else st.varSelsOverflow = true;
+        }
+        if (sel) {
+            const c0 = sel.charCodeAt(0);
+            if ((c0 === 58 || c0 === 104 || c0 === 98 || c0 === 72 || c0 === 66) && VAR_SCOPE.test(sel)) overrideCustomProps(style, sel);
+        }
         return sel;
     }
 
@@ -253,7 +274,7 @@
         if (budget.rules >= LIMITS.rulesPerScan) return;
         budget.rules++;
 
-        if (isRule(rule, "CSSStyleRule")) {
+        if (isRule(rule, CStyle, 1)) {
             const resolved = onStyleRule(rule, parentSel);
             let nested = null;
             if (depth < 6) { try { nested = rule.cssRules; } catch {} }
@@ -265,13 +286,13 @@
                 }
             }
         }
-        else if (isRule(rule, "CSSFontFaceRule")) {
+        else if (isRule(rule, CFace, 5)) {
             if (st.faceRules.length < LIMITS.faceRules) st.faceRules.push({ rule, parent });
         }
-        else if (isRule(rule, "CSSImportRule")) {
+        else if (isRule(rule, CImport, 3)) {
             if (rule.styleSheet && depth < 4) scanSheet(rule.styleSheet, depth + 1, budget);
         }
-        else if (depth < 6 && !isRule(rule, "CSSKeyframesRule")) {
+        else if (depth < 6 && !isRule(rule, CKey, 7)) {
             let nested = null;
             try { nested = rule.cssRules; } catch {}
             if (nested) {
@@ -291,7 +312,7 @@
 
         let rules;
         try { rules = sheet.cssRules; }
-        catch (e) { if (e && e.name === "SecurityError") st.unreadable.add(sheet); return false; }
+        catch (e) { if (e && e.name === "SecurityError") { st.unreadable.add(sheet); st.hasUnreadable = true; } return false; }
 
         const start = st.processed.get(sheet) || 0;
         if (!rules || (st.processed.has(sheet) && rules.length === start)) return false;
@@ -346,6 +367,7 @@
             }
             catch {}
         }
+        if (byParent.size && document.fonts && st && st.fontCount >= 0) st.fontCount = document.fonts.size;
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -413,10 +435,10 @@
                 }
             }
 
-            const cat = F.classifyName(lower, cfg.matchers);
-            if (registerFace(family, lower, cat, st.initialDone && hasEditor())) changed = true;
-            else if (!cat && !F.isReservedFamily(lower) && !cfg.chosenLower.has(lower) && !st.faces.has(lower) && !page.lateNames.has(lower)) {
-                st.needsResample = true;
+            if (!cfg.chosenLower.has(lower) && !st.faces.has(lower) && !page.lateNames.has(lower) && !F.isReservedFamily(lower)) {
+                const cat = F.classifyName(lower, cfg.matchers);
+                if (registerFace(family, lower, cat, st.initialDone && hasEditor())) changed = true;
+                else if (!cat) st.needsResample = true;
             }
         }
         return changed;
@@ -503,10 +525,12 @@
 
     function rebuild() {
         const css = buildSiteCss();
-        trackOwnFaces(() => {
-            if (css !== st.lastCss) { st.lastCss = css; siteSink.set(css); }
-            attach();
-        });
+        if (css !== st.lastCss) {
+            st.lastCss = css;
+            if (st.faces.size || st.pageFaces.size) trackOwnFaces(() => { siteSink.set(css); attach(); });
+            else { siteSink.set(css); attach(); }
+        }
+        else attach();
         syncJsFaces();
     }
 
@@ -546,24 +570,36 @@
         return h;
     }
 
-    function elemHash(el) {
+    function elemHash(el, extra = "") {
         const tag = el.nodeName;
         const cls = typeof el.className === "string" ? el.className : (el.getAttribute("class") || "");
         const stl = el.getAttribute("style") || "";
-        const h1 = hashMix(hashMix(hashMix(0x811c9dc5, tag), cls), stl);
-        const h2 = hashMix(hashMix(hashMix(0x9e3779b9, stl), cls), tag);
+        let h1 = hashMix(hashMix(hashMix(0x811c9dc5, tag), cls), stl);
+        let h2 = hashMix(hashMix(hashMix(0x9e3779b9, stl), cls), tag);
+        if (extra) { h1 = hashMix(h1, extra); h2 = hashMix(h2, extra); }
         return (h1 >>> 0) * 2097152 + (h2 >>> 11);
     }
 
-    function processElement(el, editorState) {
-        if (st.sampled.size >= LIMITS.sampled) return false;
+    function registerComputed(ff, el, editorState) {
+        const a = ff && analyze(ff);
+        if (!a) return false;
+        const defer = editorState === null ? (hasUnregisteredMono(a) && inEditor(el)) : editorState;
+        return registerNames(a, defer);
+    }
+
+    function processElement(el, editorState, forceComputed = false) {
+        if (st.sampled.size >= LIMITS.sampled || SKIP_TAGS.has(el.localName)) return false;
         const key = elemHash(el);
         if (st.sampled.has(key)) return false;
         st.sampled.add(key);
 
-        const editor = editorState === null ? inEditor(el) : editorState;
-        const a = analyze(getComputedStyle(el).fontFamily);
-        return !!a && registerNames(a, editor);
+        if (!forceComputed) {
+            const stInline = el.style;
+            const iff = stInline && stInline.fontFamily;
+            if (iff && !iff.includes("var(")) return registerComputed(iff, el, editorState);
+            if (!(stInline && stInline.font)) return false;
+        }
+        return registerComputed(getComputedStyle(el).fontFamily, el, editorState);
     }
 
     function flushLearn() {
@@ -595,7 +631,7 @@
         let added = false;
         walkElements(root, 2000, el => {
             if (el.shadowRoot && scanShadowRoot(el.shadowRoot)) added = true;
-            if (processElement(el, true)) added = true;
+            if (processElement(el, true, true)) added = true;
         });
         flushLearn();
         if (added) commit();
@@ -604,6 +640,23 @@
     const nextIdle = typeof requestIdleCallback === "function"
         ? fn => requestIdleCallback(fn, { timeout: 250 })
         : fn => setTimeout(() => fn(null), 0);
+
+    function sampleVarSelectors(editorState) {
+        if (!st.varSels.size) return false;
+        let added = false;
+        for (const sel of st.varSels) {
+            try {
+                let n = 0;
+                for (const el of document.querySelectorAll(sel)) {
+                    if (processElement(el, editorState, true)) added = true;
+                    if (++n >= 16 || st.sampled.size >= LIMITS.sampled) break;
+                }
+            }
+            catch {}
+            if (st.sampled.size >= LIMITS.sampled) break;
+        }
+        return added;
+    }
 
     function sample() {
         if (!st) return;
@@ -614,12 +667,17 @@
         st.sampledOnce = true;
 
         const stream = domElements(document.body);
-        let visited = 0, added = false;
+        let visited = 0, added = false, varsDone = false;
 
         const chunk = deadline => {
             if (!cfg) return;
             editorPresentCache = null;
             const editorState = hasEditor() ? null : false;
+            if (!varsDone && !st.hasUnreadable && !st.needsResample) {
+                varsDone = true;
+                if (sampleVarSelectors(editorState)) added = true;
+            }
+            const full = st.hasUnreadable || st.varSelsOverflow;
             const idle = !!(deadline && !deadline.didTimeout);
             let step = 0, done = false;
 
@@ -629,7 +687,10 @@
                 visited++;
                 step++;
                 if (el.shadowRoot && scanShadowRoot(el.shadowRoot)) added = true;
-                if (processElement(el, editorState)) added = true;
+                if (full ? processElement(el, editorState, true)
+                    : (el.hasAttribute("style") && el.style && (el.style.fontFamily || el.style.font) && processElement(el, editorState, false))) {
+                    added = true;
+                }
             }
 
             if (!done && visited < LIMITS.sampleDom && st.sampled.size < LIMITS.sampled) { nextIdle(chunk); return; }
@@ -640,7 +701,7 @@
             if (added) commit();
             if (st.sampleAgain) { st.sampleAgain = false; sample(); }
         };
-        chunk(null);
+        nextIdle(chunk);
     }
 
     const clearTextareaMirrors = () => {
@@ -718,12 +779,12 @@
 
         const start = () => {
             schedule(0);
-            setTimeout(() => schedule(0), 100);
+            setTimeout(() => { if (cfg && st && !st.initialDone) schedule(0); }, 100);
             if (document.head) {
                 new MutationObserver(muts => {
                     for (const m of muts) {
                         for (const n of m.addedNodes) {
-                            if (n.nodeName === "STYLE" || n.nodeName === "LINK") { schedule(150); return; }
+                            if (n.nodeName === "STYLE" || isStyleLink(n)) { schedule(150); return; }
                         }
                     }
                 }).observe(document.head, { childList: true });
@@ -737,7 +798,7 @@
         document.addEventListener("focusin", e => {
             if (cfg && cfg.settings.mono.textarea && e.target && e.target.nodeName === "TEXTAREA") syncTextareaMirrors(e.target);
         }, true);
-        document.addEventListener("load", e => { if (e.target && e.target.nodeName === "LINK") schedule(0); }, true);
+        document.addEventListener("load", e => { if (isStyleLink(e.target)) schedule(16); }, true);
         if (document.fonts) document.fonts.addEventListener("loadingdone", () => { if (st) { st.fontsDirty = true; schedule(50); } });
         window.addEventListener("load", () => { schedule(50); setTimeout(() => schedule(0), 500); }, { once: true });
     }
@@ -781,14 +842,14 @@
             settings, fonts, monoSize, monoScale, chosenLower, hintNames,
             matchers: F.buildMatchers(settings),
             protectSel: editorSelector(settings.editors, settings.mono.textarea),
+            editorRootSel: [...F.EDITOR_ROOTS, ...settings.editors.selectors.filter(F.validSelector)].join(","),
             editorsOffSite: matchesHosts(settings.editors.offSites),
             preFaces: new Set(hintNames.map(norm))
         };
 
-        trackOwnFaces(() => {
-            baseSink.set(buildBaseCss());
-            attach();
-        });
+        const applyBase = () => { baseSink.set(buildBaseCss()); attach(); };
+        if (hintNames.length) trackOwnFaces(applyBase);
+        else applyBase();
         listen();
         if (document.readyState !== "loading") schedule(0);
     }
@@ -801,7 +862,7 @@
     }
 
     function findEditors() {
-        const rootSel = [...F.EDITOR_ROOTS, ...cfg.settings.editors.selectors.filter(F.validSelector)].join(",");
+        const rootSel = cfg.editorRootSel;
         const found = new Map();
         const add = el => {
             const name = describe(el);
@@ -810,10 +871,10 @@
         const isMono = el => { const a = el && analyze(getComputedStyle(el).fontFamily); return !!a && a.cat === "mono"; };
 
         try {
-            document.querySelectorAll(rootSel).forEach(add);
+            if (rootSel) document.querySelectorAll(rootSel).forEach(add);
             let n = 0;
             for (const input of document.querySelectorAll(F.EDITOR_PROXY)) {
-                if (!input.closest(rootSel) && (isMono(input) || isMono(input.parentElement))) add(input.parentElement || input);
+                if ((!rootSel || !input.closest(rootSel)) && (isMono(input) || isMono(input.parentElement))) add(input.parentElement || input);
                 if (++n >= 50) break;
             }
         }
@@ -821,13 +882,32 @@
         return [...found.values()].slice(0, 6);
     }
 
+    function hasDirectText(el) {
+        for (let n = el.firstChild; n; n = n.nextSibling) {
+            if (n.nodeType === 3 && /\S/.test(n.nodeValue)) return true;
+        }
+        const t = el.localName;
+        return t === "input" || t === "textarea" || t === "select" || el.isContentEditable;
+    }
+
     function findUnknownFonts() {
         const root = document.body || document.documentElement;
         if (!root) return [];
-        const counts = new Map(), unknown = new Map();
+        const counts = new Map(), unknown = new Map(), byShape = new Map();
 
         walkElements(root, LIMITS.reportDom, el => {
-            const ff = getComputedStyle(el).fontFamily;
+            if (SKIP_TAGS.has(el.localName) || !hasDirectText(el)) return;
+            let ff;
+            const iff = el.hasAttribute("style") && el.style && el.style.fontFamily;
+            if (iff && !iff.includes("var(")) ff = iff;
+            else {
+                const key = elemHash(el, el.parentElement ? el.parentElement.nodeName : "");
+                ff = byShape.get(key);
+                if (ff === undefined) {
+                    ff = getComputedStyle(el).fontFamily;
+                    byShape.set(key, ff);
+                }
+            }
             if (ff && ff.length <= LIMITS.valueLen) counts.set(ff, (counts.get(ff) || 0) + 1);
         });
         for (const [ff, count] of counts) {
