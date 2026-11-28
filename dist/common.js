@@ -543,6 +543,6 @@
         addHints, HINT_LIMITS, cleanFontName, cleanHostList, cleanSelectors, cleanNameList, cleanManual, parseFontLines,
         norm, cssQuote, isReservedFamily, buildMatchers, classifyName, splitFamilies, analyzeStack, looksLikeFontStack,
         editorBoundary, splitSelectorList, dropSweeps, validSelector, familyValue,
-        fontFaceCss, fontFaceExtraCss, jsFontFaceSpecs, isStandardFace, monoRule, monoDefaultsCss
+        fontFaceCss, fontFaceExtraCss, fontFaceVariants, faceRule, jsFontFaceSpecs, isStandardFace, monoRule, monoDefaultsCss
     };
 })(typeof self !== "undefined" ? self : this);

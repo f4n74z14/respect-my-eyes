@@ -558,5 +558,71 @@ const BF = { available: true, standard: "Times New Roman", serif: "Georgia", san
   assert.strictEqual(dupEntry && dupEntry.count, 3, "deduplicated unknown counting preserves total element count");
   assert.strictEqual(dupCalls, 1, "identical sibling elements invoke getComputedStyle only once in findUnknownFonts");
 
+  // --- 16. Pending-substitution `font: var(...)` + unclassified variable @font-face in deep blockquote + trackOwnFaces stability ---
+  const pendEnv = setup({ settings: undefined, bf: BF });
+  await wait(400);
+  const pendHost = pendEnv.w.document.createElement("div");
+  pendHost.innerHTML = '<div><div><blockquote class="pend-bq">Quote text</blockquote></div></div>';
+  pendEnv.w.document.body.appendChild(pendHost);
+  const bqEl = pendHost.querySelector("blockquote.pend-bq");
+  const termoliRule = {
+    style: { getPropertyValue: p => p === "font-family" ? "Termoli" : "" },
+    get type() { return 5; }
+  };
+  Object.setPrototypeOf(termoliRule, pendEnv.w.CSSFontFaceRule.prototype);
+  const bqRule = {
+    selectorText: ".pend-bq",
+    // Blink pending-substitution shorthand expands to empty longhands with style.length >= 12 and "font-family:" in cssText
+    style: { fontFamily: "", font: "", length: 17, cssText: "font-family: ; letter-spacing: normal;", getPropertyValue: () => "" }
+  };
+  Object.setPrototypeOf(bqRule, pendEnv.w.CSSStyleRule.prototype);
+  const pendSheet = { cssRules: [termoliRule, bqRule], deleteRule(i) { this.cssRules.splice(i, 1); } };
+  Object.defineProperty(pendEnv.w.document, "adoptedStyleSheets", {
+    get: () => [pendSheet, ...pendEnv.adopted()],
+    set: () => {},
+    configurable: true
+  });
+  const origPendGCS = pendEnv.w.getComputedStyle.bind(pendEnv.w);
+  pendEnv.w.getComputedStyle = el => el === bqEl ? { fontFamily: 'Termoli, "Georgia", serif' } : origPendGCS(el);
+  pendEnv.w.__fonts.push(
+    { family: "Termoli", weight: "1 1000", style: "normal", stretch: "normal" },
+    { family: "Termoli", weight: "1 1000", style: "italic", stretch: "normal" }
+  );
+  // Trigger rescan + loadingdone
+  const pendTrig = pendEnv.w.document.createElement("style");
+  pendTrig.textContent = ".pend-trig { font-family: Arial; }";
+  pendEnv.w.document.head.appendChild(pendTrig);
+  (pendEnv.w.__fontListeners.loadingdone || []).forEach(fn => fn({}));
+  await wait(450);
+
+  const pendSite = pendEnv.sheets()[1];
+  assert.ok(pendSite.includes('@font-face{font-family:"Termoli";font-weight:1 1000;font-style:normal;src:local("Georgia")'), "unclassified variable face in deep blockquote is discovered via pending font: var(...) and overridden as serif");
+  assert.ok(pendSite.includes('@font-face{font-family:"Termoli";font-weight:600 1000;font-style:italic;src:local("Georgia Bold Italic")'), "italic variable bold half replicated cleanly");
+  assert.deepStrictEqual(pendSheet.cssRules, [bqRule], "page @font-face rule for Termoli is deleted");
+
+  // Rebuilding siteSink with equal document.fonts count + loadingdone must not duplicate 1 599 / 600 1000 rules
+  const trackEnv = setup({ settings: undefined, bf: BF, fonts: [
+    { family: "Open Sans", weight: "1 1000", style: "normal", stretch: "normal" }
+  ] });
+  await wait(350);
+  const faceBefore = (trackEnv.sheets()[1].match(/font-weight:1 599/g) || []).length;
+  assert.strictEqual(faceBefore, 1, "initial split rule emitted once");
+  // Simulate Blink recreating CSSFontFace objects from siteSink during replaceSync without changing document.fonts.size
+  const origReplace = trackEnv.adopted()[1].replaceSync.bind(trackEnv.adopted()[1]);
+  trackEnv.adopted()[1].replaceSync = css => {
+    origReplace(css);
+    trackEnv.w.__fonts.splice(0, trackEnv.w.__fonts.length,
+      { family: "Open Sans", weight: "1 599", style: "normal", stretch: "normal" }
+    );
+  };
+  const extraSel = trackEnv.w.document.createElement("style");
+  extraSel.textContent = ".eq-sel { font-family: system-ui, sans-serif; }";
+  trackEnv.w.document.head.appendChild(extraSel);
+  await wait(250);
+  (trackEnv.w.__fontListeners.loadingdone || []).forEach(fn => fn({}));
+  await wait(250);
+  const faceAfter = (trackEnv.sheets()[1].match(/font-weight:1 599/g) || []).length;
+  assert.strictEqual(faceAfter, 1, "trackOwnFaces marks recreated FontFaces even when fonts.size does not grow");
+
   console.log("content.test.js: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

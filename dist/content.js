@@ -73,6 +73,7 @@
         sel: { sans: new Set(), serif: new Set(), mono: new Set() },
         vars: [],
         varSels: new Set(),
+        newVarSels: new Set(),
         varSelsOverflow: false,
         sampled: new Set(),
         hasUnreadable: false,
@@ -136,10 +137,8 @@
         const prev = new Set();
         fonts.forEach(f => prev.add(f));
         fn();
-        if (fonts.size > prev.size) {
-            fonts.forEach(f => { if (!prev.has(f)) page.ourFaces.add(f); });
-            if (st && st.fontCount >= 0) st.fontCount = fonts.size;
-        }
+        fonts.forEach(f => { if (!prev.has(f)) page.ourFaces.add(f); });
+        if (st && st.fontCount >= 0) st.fontCount = fonts.size;
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -236,7 +235,12 @@
 
     function addVarSel(sel) {
         if (!safeSelector(sel)) return;
-        if (st.varSels.size < 200) st.varSels.add(sel);
+        if (st.varSels.size < 200) {
+            if (!st.varSels.has(sel)) {
+                st.varSels.add(sel);
+                if (st.sampled.size) st.newVarSels.add(sel);
+            }
+        }
         else st.varSelsOverflow = true;
     }
 
@@ -262,7 +266,10 @@
                 }
             }
         }
-        else if (style.font && style.font.includes("var(")) addVarSel(sel);
+        else if ((style.font && style.font.includes("var(")) ||
+            (!ff && !style.font && style.length >= 12 && typeof style.cssText === "string" && style.cssText.includes("font-family:"))) {
+            addVarSel(sel);
+        }
 
         if (sel && VAR_SCOPE.test(sel)) overrideCustomProps(style, sel);
         return sel;
@@ -408,7 +415,7 @@
             const lower = norm(family);
             if (!lower) continue;
 
-            const weight = String(f.weight || "").slice(0, 40), style = String(f.style || "").slice(0, 40), stretch = String(f.stretch || "").slice(0, 40);
+            const weight = String(f.weight || "").slice(0, 40), style = String(f.style || "").slice(0, 40), stretch = String(f.stretch || "normal").slice(0, 40);
             const key = `${lower}|${weight}|${style}|${stretch}`;
             const desc = { family, lower, weight, style, stretch };
 
@@ -502,8 +509,13 @@
         st.pageFaces.forEach(pf => {
             const known = st.faces.get(pf.lower);
             const cat = known ? known.cat : cfg.matchers.manual.get(pf.lower);
-            const css = isCat(cat) && !cfg.chosenLower.has(pf.lower) && F.fontFaceExtraCss(pf.family, cat, cfg.fonts[cat].name, cfg.monoScale, pf);
-            if (css) out.push(css);
+            const variants = isCat(cat) && !cfg.chosenLower.has(pf.lower) && F.fontFaceVariants(cat, cfg.fonts[cat].name, cfg.monoScale, pf);
+            if (!variants) return;
+            const fam = F.cssQuote(pf.family);
+            for (const v of variants) {
+                st.faceKeys.add(`${pf.lower}|${v.weight}|${v.style}|${v.stretch}`);
+                out.push(F.faceRule(fam, v.weight, v.style, v.stretch, v.src, v.scalePct));
+            }
         });
 
         for (const cat of CATS) {
@@ -584,17 +596,17 @@
         return registerNames(a, defer);
     }
 
-    function processElement(el, editorState, forceComputed = false) {
+    function processElement(el, editorState, forceComputed = false, bypassCache = false) {
         if (st.sampled.size >= LIMITS.sampled || SKIP_TAGS.has(el.localName)) return false;
-        const key = elemHash(el);
-        if (st.sampled.has(key)) return false;
+        const key = elemHash(el, el.parentElement ? el.parentElement.nodeName : "");
+        if (!bypassCache && st.sampled.has(key)) return false;
         st.sampled.add(key);
 
         if (!forceComputed) {
             const stInline = el.style;
             const iff = stInline && stInline.fontFamily;
             if (iff && !iff.includes("var(")) return registerComputed(iff, el, editorState);
-            if (!(stInline && stInline.font)) return false;
+            if (!iff && !(stInline && stInline.font)) return false;
         }
         return registerComputed(getComputedStyle(el).fontFamily, el, editorState);
     }
@@ -642,16 +654,18 @@
         if (!st.varSels.size) return false;
         let added = false;
         for (const sel of st.varSels) {
+            const fresh = st.newVarSels.has(sel);
             try {
                 let n = 0;
                 for (const el of document.querySelectorAll(sel)) {
-                    if (processElement(el, editorState, true)) added = true;
+                    if (processElement(el, editorState, true, fresh)) added = true;
                     if (++n >= 16 || st.sampled.size >= LIMITS.sampled) break;
                 }
             }
             catch {}
             if (st.sampled.size >= LIMITS.sampled) break;
         }
+        st.newVarSels.clear();
         return added;
     }
 
@@ -670,11 +684,11 @@
             if (!cfg) return;
             editorPresentCache = null;
             const editorState = hasEditor() ? null : false;
-            if (!varsDone && !st.hasUnreadable && !st.needsResample) {
+            if (!varsDone) {
                 varsDone = true;
                 if (sampleVarSelectors(editorState)) added = true;
             }
-            const full = st.hasUnreadable || st.varSelsOverflow;
+            const full = st.hasUnreadable || st.needsResample || st.varSelsOverflow;
             const idle = !!(deadline && !deadline.didTimeout);
             let step = 0, el = null;
 
@@ -684,8 +698,8 @@
                 visited++;
                 step++;
                 if (el.shadowRoot && scanShadowRoot(el.shadowRoot)) added = true;
-                const inlineFont = !full && el.hasAttribute("style") && el.style && (el.style.fontFamily || el.style.font);
-                if ((full || inlineFont) && processElement(el, editorState, full)) added = true;
+                const inlineFont = el.hasAttribute("style") && el.style && (el.style.fontFamily || el.style.font);
+                if ((inlineFont || (full && !SKIP_TAGS.has(el.localName) && hasDirectText(el))) && processElement(el, editorState, full)) added = true;
             }
 
             if (el && visited < LIMITS.sampleDom && st.sampled.size < LIMITS.sampled) { nextIdle(chunk); return; }
