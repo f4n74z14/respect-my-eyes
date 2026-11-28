@@ -306,6 +306,39 @@ const fonts = s => JSON.parse(JSON.stringify(s.rmeSettings.manualFonts));
   assert.ok(p.$("toasts").textContent.includes("500"), "shows limit warning instead of falsely claiming font was added");
   assert.strictEqual(p.$("unknown").children.length, 1, "card is kept when 500-font cap prevents saving");
 
+  // many unclassified fonts: preview top 4, live count, search filter (6+), Show N more/fewer, and promote next on Add
+  sharedStore.rmeSettings = { version: 4 };
+  const manyUnknown = Array.from({ length: 10 }, (_, i) => ({ name: `Sample Font ${i + 1}`, count: (10 - i) * 10 }));
+  p = await page("popup.html", {
+    report: { host: "fonts.test", active: true, protect: true, siteOff: false, deferred: [], unknown: manyUnknown, editors: [{ sample: "div.cm-editor", count: 1 }] }
+  });
+  assert.strictEqual(p.$("unknownCount").textContent, "10", "shows total unclassified font count");
+  assert.strictEqual(p.$("unknownFilter").hidden, false, "filter box appears when site has 6+ unknown fonts");
+  assert.strictEqual(p.$("unknown").children.length, 4, "shows top 4 unknown fonts initially so Code editors stays reachable");
+  assert.strictEqual(p.$("unknownMore").hidden, false);
+  assert.strictEqual(p.$("unknownMore").textContent, "Show 6 more");
+
+  p.$("unknownMore").click();
+  assert.strictEqual(p.$("unknown").children.length, 10, "Show more expands all unknown fonts");
+  assert.strictEqual(p.$("unknownMore").textContent, "Show fewer");
+  p.$("unknownMore").click();
+  assert.strictEqual(p.$("unknown").children.length, 4, "Show fewer collapses back to top 4");
+
+  p.$("unknownFilter").value = "Font 9"; p.$("unknownFilter").oninput();
+  assert.strictEqual(p.$("unknownCount").textContent, "1 of 10", "shows filtered count while searching");
+  assert.strictEqual(p.$("unknown").children.length, 1, "filter finds matches beyond the top-4 preview");
+  assert.ok(p.$("unknown").textContent.includes("Sample Font 9") && p.$("unknownMore").hidden, "toggle hides while filtering");
+  p.$("unknownFilter").value = "zzz"; p.$("unknownFilter").oninput();
+  assert.ok(p.$("unknown").textContent.includes("No matching fonts"));
+  p.$("unknownFilter").value = ""; p.$("unknownFilter").oninput();
+  assert.strictEqual(p.$("unknown").children.length, 4);
+
+  p.$("unknown").children[0].querySelector("button.primary").click();
+  await wait(300);
+  assert.strictEqual(p.$("unknownCount").textContent, "9", "count decrements after adding");
+  assert.strictEqual(p.$("unknown").children.length, 4, "next highest-count font promotes into preview");
+  assert.strictEqual(p.$("unknownMore").textContent, "Show 5 more");
+
   // UI.md consistency: all in-body popup switches sit in .card > .setting rows and Settings footer stays pinned outside scrollable #app
   const appSwitches = [...p.$("app").querySelectorAll("label.switch")];
   assert.ok(appSwitches.length === 3 && appSwitches.every(sw => sw.closest(".card > .setting")), "all in-body popup switches use unified .card > .setting alignment");

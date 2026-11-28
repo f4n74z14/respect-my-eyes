@@ -6,8 +6,10 @@
 
     const SITE_CATS = [["sans", "Sans"], ["serif", "Serif"], ["mono", "Mono"], ["ignore", "Icon"]];
     const BROWSER_STORES = new Set(["chromewebstore.google.com", "microsoftedge.microsoft.com"]);
+    const UNKNOWN_PREVIEW = 4, UNKNOWN_FILTER_FROM = 6;
 
     let settings, bf, tab, host = "", report = null, baseBanner = "", lastTabLearned = [];
+    let unknownList = [], unknownExpanded = false;
 
     const save = () => F.storage.save(settings);
     const setSiteFlag = (list, active) => {
@@ -68,50 +70,76 @@
         });
     }
 
-    // Fonts nobody could classify: one card each, pick a category and add
-    function renderUnknown() {
-        const list = report && report.active ? report.unknown : [];
+    function makeUnknownCard({ name, count }) {
+        let category = "sans";
 
-        $("attention").hidden = !list.length;
-        $("unknown").replaceChildren(...list.map(({ name, count }) => {
-            let category = "sans";
+        const seg = el("div", "seg", null, { role: "radiogroup", "aria-label": `Category of ${name}` });
+        segmented(seg, SITE_CATS, category, v => { category = v; });
 
-            const seg = el("div", "seg", null, { role: "radiogroup", "aria-label": `Category of ${name}` });
-            segmented(seg, SITE_CATS, category, v => { category = v; });
-
-            const card = el("div", "card2");
-            const add = el("button", "primary sm", "Add", {
-                type: "button",
-                async onclick() {
-                    const key = F.norm(name);
-                    const idx = settings.manualFonts.findIndex(f => F.norm(f.name) === key);
-                    if (idx === -1 && settings.manualFonts.length >= 500) {
-                        toast("Font list limit (500) reached");
-                        return;
-                    }
-                    const next = idx > -1
-                        ? settings.manualFonts.map((f, i) => i === idx ? { name: f.name, category } : f)
-                        : [...settings.manualFonts, { name, category }];
-                    settings.manualFonts = F.cleanManual(next);
-                    await save();
-
-                    const finishRemove = () => { card.remove(); $("attention").hidden = !$("unknown").children.length; };
-                    const delay = animDelay(160);
-                    if (!delay) finishRemove();
-                    else { card.classList.add("gone"); setTimeout(finishRemove, delay); }
-
-                    toast(`Added \u201c${name}\u201d as ${SITE_CATS.find(c => c[0] === category)[1].toLowerCase()}`);
-                    if (category === "ignore") needsReload("Reload to restore icon font.", true);
+        const card = el("div", "card2");
+        const add = el("button", "primary sm", "Add", {
+            type: "button",
+            async onclick() {
+                const key = F.norm(name);
+                const idx = settings.manualFonts.findIndex(f => F.norm(f.name) === key);
+                if (idx === -1 && settings.manualFonts.length >= 500) {
+                    toast("Font list limit (500) reached");
+                    return;
                 }
-            });
+                const next = idx > -1
+                    ? settings.manualFonts.map((f, i) => i === idx ? { name: f.name, category } : f)
+                    : [...settings.manualFonts, { name, category }];
+                settings.manualFonts = F.cleanManual(next);
+                await save();
 
-            const top = el("div", "top");
-            top.append(el("span", "name", name, { title: name }), el("span", "hint", count === 1 ? "1 element" : `${count} elements`));
-            const bottom = el("div", "bottom");
-            bottom.append(seg, add);
-            card.append(top, bottom);
-            return card;
-        }));
+                unknownList = unknownList.filter(f => F.norm(f.name) !== key);
+                const finishRemove = () => drawUnknown();
+                const delay = animDelay(160);
+                if (!delay) finishRemove();
+                else { card.classList.add("gone"); setTimeout(finishRemove, delay); }
+
+                toast(`Added \u201c${name}\u201d as ${SITE_CATS.find(c => c[0] === category)[1].toLowerCase()}`);
+                if (category === "ignore") needsReload("Reload to restore icon font.", true);
+            }
+        });
+
+        const top = el("div", "top");
+        top.append(el("span", "name", name, { title: name }), el("span", "hint", count === 1 ? "1 element" : `${count} elements`));
+        const bottom = el("div", "bottom");
+        bottom.append(seg, add);
+        card.append(top, bottom);
+        return card;
+    }
+
+    function drawUnknown() {
+        const total = unknownList.length;
+        $("attention").hidden = !total;
+        if (!total) { $("unknown").replaceChildren(); return; }
+
+        const filter = $("unknownFilter");
+        filter.hidden = total < UNKNOWN_FILTER_FROM;
+        if (filter.hidden) filter.value = "";
+
+        const query = filter.hidden ? "" : filter.value.trim().toLowerCase();
+        const matches = query ? unknownList.filter(f => f.name.toLowerCase().includes(query)) : unknownList;
+        $("unknownCount").textContent = query ? `${matches.length} of ${total}` : String(total);
+        const visible = query || unknownExpanded ? matches : matches.slice(0, UNKNOWN_PREVIEW);
+        const hiddenCount = matches.length - visible.length;
+
+        $("unknown").replaceChildren(...(visible.length ? visible.map(makeUnknownCard) : [el("div", "empty", "No matching fonts.")]));
+
+        const more = $("unknownMore");
+        const canToggle = !query && (hiddenCount > 0 || (unknownExpanded && matches.length > UNKNOWN_PREVIEW));
+        more.hidden = !canToggle;
+        if (canToggle) more.textContent = unknownExpanded ? "Show fewer" : `Show ${hiddenCount} more`;
+    }
+
+    // Fonts nobody could classify: prioritized preview with search & expand when a site has many
+    function renderUnknown() {
+        unknownList = report && report.active ? report.unknown.map(x => ({ ...x })) : [];
+        unknownExpanded = false;
+        $("unknownFilter").value = "";
+        drawUnknown();
     }
 
     const row = (text, trailing) => {
@@ -194,6 +222,8 @@
         });
         $("app").classList.toggle("off", !settings.enabled);
         $("options").onclick = () => openSettings();
+        $("unknownFilter").oninput = drawUnknown;
+        $("unknownMore").onclick = () => { unknownExpanded = !unknownExpanded; drawUnknown(); };
         $("reload").onclick = async () => {
             const target = tab || (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
             if (target) {

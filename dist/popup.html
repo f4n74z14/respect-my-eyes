@@ -28,7 +28,15 @@
         <div id="fonts"></div>
     </section>
 
-    <section id="attention" hidden><h2>Needs your input</h2><div id="unknown"></div></section>
+    <section id="attention" hidden>
+        <div class="sec-head">
+            <h2>Needs your input</h2>
+            <span id="unknownCount" class="hint sec-count"></span>
+        </div>
+        <input type="search" id="unknownFilter" class="filter-sm" placeholder="Filter fonts" aria-label="Filter unclassified fonts" hidden>
+        <div id="unknown"></div>
+        <button type="button" id="unknownMore" class="more-btn" hidden></button>
+    </section>
     <section id="editorsBox" hidden>
         <h2>Code editors</h2>
         <div class="card ed-controls">
