@@ -221,7 +221,7 @@
 
         for (let i = 0; i < limit; i++) {
             const prop = style[i];
-            if (prop.charCodeAt(0) !== 45 || prop.charCodeAt(1) !== 45 || !SAFE_VAR_PROP.test(prop)) continue;
+            if (!prop.startsWith("--") || !SAFE_VAR_PROP.test(prop)) continue;
             const value = style.getPropertyValue(prop).trim();
             if (!value || value.length > 500 || value.includes("(") || !F.looksLikeFontStack(value, prop)) continue;
 
@@ -234,6 +234,12 @@
         if (decls && !/^:host\b|^:(?:where|is)\(\s*:host\b/i.test(sel)) st.vars.push(`${sel}{${decls}}`);
     }
 
+    function addVarSel(sel) {
+        if (!safeSelector(sel)) return;
+        if (st.varSels.size < 200) st.varSels.add(sel);
+        else st.varSelsOverflow = true;
+    }
+
     function onStyleRule(rule, parentSel) {
         let sel = rule.selectorText;
         if (sel && sel.includes("&") && parentSel && sel.length + parentSel.length < LIMITS.selectorLen) {
@@ -242,10 +248,7 @@
         const style = rule.style;
         const ff = style.fontFamily;
         if (ff) {
-            if (ff.includes("var(") && safeSelector(sel)) {
-                if (st.varSels.size < 200) st.varSels.add(sel);
-                else st.varSelsOverflow = true;
-            }
+            if (ff.includes("var(")) addVarSel(sel);
             const a = analyze(ff);
             if (a) {
                 const defer = hasUnregisteredMono(a) && hasEditor() && (st.initialDone || ruleTouchesEditor(sel));
@@ -259,14 +262,9 @@
                 }
             }
         }
-        else if (style.font && style.font.includes("var(") && safeSelector(sel)) {
-            if (st.varSels.size < 200) st.varSels.add(sel);
-            else st.varSelsOverflow = true;
-        }
-        if (sel) {
-            const c0 = sel.charCodeAt(0);
-            if ((c0 === 58 || c0 === 104 || c0 === 98 || c0 === 72 || c0 === 66) && VAR_SCOPE.test(sel)) overrideCustomProps(style, sel);
-        }
+        else if (style.font && style.font.includes("var(")) addVarSel(sel);
+
+        if (sel && VAR_SCOPE.test(sel)) overrideCustomProps(style, sel);
         return sel;
     }
 
@@ -544,23 +542,22 @@
     // DOM sampling, editor learning & textarea mirror syncing
     // -----------------------------------------------------------------------------------------------------------------
 
-    function* domElements(root) {
-        const stack = [root];
-        while (stack.length) {
-            const walker = document.createTreeWalker(stack.pop(), 1);
-            for (let el; (el = walker.nextNode()); ) {
-                if (el.shadowRoot) stack.push(el.shadowRoot);
-                yield el;
+    function nextElement(cursor) {
+        while (cursor.walker || cursor.stack.length) {
+            if (!cursor.walker) cursor.walker = document.createTreeWalker(cursor.stack.pop(), 1);
+            const el = cursor.walker.nextNode();
+            if (el) {
+                if (el.shadowRoot) cursor.stack.push(el.shadowRoot);
+                return el;
             }
+            cursor.walker = null;
         }
+        return null;
     }
 
     function walkElements(root, limit, fn) {
-        let n = 0;
-        for (const el of domElements(root)) {
-            fn(el);
-            if (++n >= limit) break;
-        }
+        const cursor = { stack: [root], walker: null };
+        for (let n = 0, el; n < limit && (el = nextElement(cursor)); n++) fn(el);
     }
 
     function hashMix(h, s) {
@@ -666,7 +663,7 @@
         st.sampling = true;
         st.sampledOnce = true;
 
-        const stream = domElements(document.body);
+        const cursor = { stack: [document.body], walker: null };
         let visited = 0, added = false, varsDone = false;
 
         const chunk = deadline => {
@@ -679,21 +676,19 @@
             }
             const full = st.hasUnreadable || st.varSelsOverflow;
             const idle = !!(deadline && !deadline.didTimeout);
-            let step = 0, done = false;
+            let step = 0, el = null;
 
-            while (visited < LIMITS.sampleDom && st.sampled.size < LIMITS.sampled && (idle ? (step === 0 || deadline.timeRemaining() > 3) : step < LIMITS.chunk)) {
-                const { value: el, done: end } = stream.next();
-                if (end) { done = true; break; }
+            while (visited < LIMITS.sampleDom && st.sampled.size < LIMITS.sampled &&
+                (idle ? (step === 0 || deadline.timeRemaining() > 3) : step < LIMITS.chunk) &&
+                (el = nextElement(cursor))) {
                 visited++;
                 step++;
                 if (el.shadowRoot && scanShadowRoot(el.shadowRoot)) added = true;
-                if (full ? processElement(el, editorState, true)
-                    : (el.hasAttribute("style") && el.style && (el.style.fontFamily || el.style.font) && processElement(el, editorState, false))) {
-                    added = true;
-                }
+                const inlineFont = !full && el.hasAttribute("style") && el.style && (el.style.fontFamily || el.style.font);
+                if ((full || inlineFont) && processElement(el, editorState, full)) added = true;
             }
 
-            if (!done && visited < LIMITS.sampleDom && st.sampled.size < LIMITS.sampled) { nextIdle(chunk); return; }
+            if (el && visited < LIMITS.sampleDom && st.sampled.size < LIMITS.sampled) { nextIdle(chunk); return; }
 
             st.sampling = false;
             st.needsResample = false;

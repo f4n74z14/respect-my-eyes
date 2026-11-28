@@ -144,8 +144,8 @@
             if (t.includes("!")) t = t.replace(/\s*!important$/i, "");
             if (!t) return;
 
-            const c0 = t.charCodeAt(0);
-            const quoted = (c0 === 34 || c0 === 39) && t.charCodeAt(t.length - 1) === c0 && t.length >= 2;
+            const q = t[0];
+            const quoted = (q === '"' || q === "'") && t[t.length - 1] === q && t.length >= 2;
             const name = quoted ? t.slice(1, -1).trim() : t;
             if (!name) return;
 
@@ -198,19 +198,18 @@
         return { names, cat, pure, firstGeneric, unknown: names.length && !names[0].cat ? names[0].name : null };
     }
 
+    const FONT_PROP = /font|family|typeface/i;
+    const NON_FONT_PROP = /size|weight|style|height|spacing/i;
+    const NON_FONT_START = /^[#.\d]|^-\d/;
+    const HAS_LETTER = /[a-z\p{L}]/iu;
+
     function looksLikeFontStack(value, prop) {
-        if (!value || /[{};@\\()\r\n]/.test(value)) return false;
-        const c0 = value.charCodeAt(0), c1 = value.charCodeAt(1);
-        if (c0 === 35 || c0 === 46 || (c0 >= 48 && c0 <= 57) || (c0 === 45 && c1 >= 48 && c1 <= 57)) return false;
-        if (!value.includes(",")) {
-            if (GENERIC_CAT[norm(value)]) return true;
-            return /font|family|typeface/i.test(prop) && !/size|weight|style|height|spacing/i.test(prop) && /[a-z\p{L}]/iu.test(value);
-        }
-        if (!/[a-z\p{L}]/iu.test(value)) return false;
-        const parts = splitFamilies(value);
-        const last = parts[parts.length - 1];
-        if (last && last.generic && GENERIC_CAT[last.lower]) return true;
-        return /font|family|typeface/i.test(prop) && !/size|weight|style|height|spacing/i.test(prop);
+        if (!value || NON_FONT_START.test(value) || /[{};@\\()\r\n]/.test(value) || !HAS_LETTER.test(value)) return false;
+        const fontProp = FONT_PROP.test(prop) && !NON_FONT_PROP.test(prop);
+        if (fontProp) return true;
+        if (!value.includes(",")) return !!GENERIC_CAT[norm(value)];
+        const last = splitFamilies(value).pop();
+        return !!(last && last.generic && GENERIC_CAT[last.lower]);
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -415,16 +414,22 @@
     }
 
     function weightBounds(weight) {
-        const n = String(weight).split(/\s+/).map(x => x === "normal" ? 400 : x === "bold" ? 700 : parseFloat(x)).filter(isFinite);
-        return n.length ? [n[0], n[n.length - 1]] : null;
+        let first = NaN, last = NaN;
+        for (const part of String(weight).trim().split(/\s+/)) {
+            const v = part === "normal" ? 400 : part === "bold" ? 700 : parseFloat(part);
+            if (!isFinite(v)) continue;
+            if (isNaN(first)) first = v;
+            last = v;
+        }
+        return isNaN(first) ? null : [first, last];
     }
 
     function isStandardFace(d) {
         const w = d.weight, s = d.style, st = d.stretch || "normal";
-        if ((w === "400" || w === "700" || w === "normal" || w === "bold") &&
-            (s === "normal" || s === "italic") && (st === "normal" || st === "100%")) return true;
+        if ((s !== "normal" && s !== "italic") || (st !== "normal" && st !== "100%")) return false;
+        if (w === "400" || w === "700" || w === "normal" || w === "bold") return true;
         const b = weightBounds(w);
-        return !!b && b[0] === b[1] && WEIGHTS.includes(b[0]) && /^(normal|italic)$/.test(s) && /^(normal|100%)$/.test(st);
+        return !!b && b[0] === b[1] && WEIGHTS.includes(b[0]);
     }
 
     function fontFaceCss(family, cat, fontName, scalePct) {
