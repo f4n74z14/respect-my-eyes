@@ -13,7 +13,7 @@ Big thanks to the [Original Project](https://github.com/sysop84/force-my-browser
 ## Why
 
 - **One setting for the whole web.** Fonts come from `chrome://settings/fonts` and follow it live. Nothing to configure per site.
-- **Works on hard sites.** Variable fonts, shadow DOM, CDN-hosted stylesheets, CSS variables and fonts loaded by scripts are all handled.
+- **Works on hard sites.** Variable fonts, shadow DOM, CDN-hosted stylesheets, CSS variables, and fonts loaded or registered in JavaScript (`FontFace` / `document.fonts`, including SPA route and language switches) are all handled.
 - **Icons stay icons.** Icon fonts (Font Awesome, Material Symbols, emoji...) are detected and never replaced.
 - **Code editors keep their cursor.** Monaco, CodeMirror, Ace and xterm.js are recognised on their own, so the cursor and selection stay aligned with the text.
 - **Fix a site in two clicks.** The toolbar popup lists fonts it could not classify; pick a category and press Add.
@@ -80,7 +80,7 @@ Most changes apply instantly. Bringing back an icon font or re-enabling a site m
 
 - Fonts used only in `::before` / `::after` or in closed shadow roots are not inspected directly.
 - `system-ui` cannot be replaced by font substitution, so it is handled with style rules.
-- A font that a site registers with JavaScript late may win until the next rescan.
+- Fonts registered dynamically in JavaScript (`FontFace` / `document.fonts`) are intercepted and shadowed automatically; only if a script registers and renders a face synchronously without triggering `loadingdone` or DOM/stylesheet mutations will it wait briefly for the next scheduled scan.
 
 ## Development
 
